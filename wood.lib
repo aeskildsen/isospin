@@ -1,0 +1,165 @@
+//################################ wood.lib ####################################
+// Shared parts for the wooden instruments.
+// Each part names its source in the literature.
+//
+// Copyright (C) 2026 Anders Eskildsen
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//##############################################################################
+
+declare name "wood";
+declare license "AGPL-3.0-or-later";
+
+import("stdfaust.lib");
+
+LN1000 = log(1000.0);
+
+//-------------------------------- smooth --------------------------------------
+// Parameter smoothing like si.smoo, but the output starts at the first input
+// value, not at 0. A Faust polyphonic voice and a new SuperCollider synth
+// start with all state at 0. With si.smoo, decay was near 0 for the first
+// strike, and that strike died at once.
+// Use it only on gains and mix levels. Faust computes an expression of
+// sliders once per block, but an expression of a smoothed signal for each
+// sample. Smoothed frequencies or decays put tan(), pow() and exp() of each
+// mode into the sample loop, and the cost increased about ten times.
+//------------------------------------------------------------------------------
+smooth(x) = x0 + (x - x0 : si.smoo)
+with { x0 = ba.sAndH(1 - 1', x); };
+
+//-------------------------------- mode ----------------------------------------
+// One mode: a resonant band-pass that decays by 60 dB in t60 seconds.
+// The filter is a TPT state-variable filter (Zavalishin), not the direct-form
+// biquad of pm.modeFilter. Its coefficients stay accurate for low modes, and
+// it stays stable when freq and t60 change while the mode rings (automation,
+// damping on note-off).
+// Q follows from the decay: alpha = ln(1000)/t60, Q = 2*pi*f/(2*alpha).
+// The output is scaled by 1/(2*tan(pi*f/SR)), thus a unit impulse gives a
+// mode amplitude of about g at each frequency.
+// A mode at or above 0.45*SR is muted.
+//
+// _ : mode(f, t60, g) : _
+//------------------------------------------------------------------------------
+mode(f, t60, g, x) = loop ~ (_, _) : (!, !, _)
+with {
+  fc = max(1, min(f, 0.45*ma.SR));
+  on = f < 0.45*ma.SR;
+  w = tan(ma.PI*fc/ma.SR);
+  alpha = LN1000/max(t60, 0.001);
+  k = alpha/(ma.PI*fc);
+  a1 = 1/(1 + w*(w + k));
+  a2 = w*a1;
+  a3 = w*a2;
+  norm = 0.5/w;
+  loop(ic1, ic2) = 2*v1 - ic1, 2*v2 - ic2, v1*norm*g*on
+  with {
+    v3 = x - ic2;
+    v1 = a1*ic1 + a2*v3;
+    v2 = ic2 + a2*ic1 + a3*v3;
+  };
+};
+
+//------------------------------- t60law ---------------------------------------
+// The wood damping law of Chaigne & Doutaut 1997 (Eq. 18):
+// the amplitude decay rate is alpha(f) = a0 + a2*f^2, thus
+// t60(f) = ln(1000)/(a0 + a2*f^2).
+// The two controls are the "damping" and "damping tilt" of Aramaki et al.
+// 2010:
+// * decay: T60 of the low modes in seconds, a0 = ln(1000)/decay.
+// * tilt (0-1): a2 = 1e-7*1000^tilt. Padauk (a2 = 1.81e-6) is at about 0.42,
+//   Chaigne's rosewood (a2 = 4.64e-6) at about 0.56. A low tilt sounds
+//   more like metal or glass, a high tilt more like dead or wet wood.
+//------------------------------------------------------------------------------
+a0of(decay) = LN1000/max(decay, 0.005);
+a2of(tilt) = 1e-7*pow(1000, max(0, min(1, tilt)));
+t60law(decay, tilt, f) = LN1000/(a0of(decay) + a2of(tilt)*f*f);
+
+//-------------------------------- rnd -----------------------------------------
+// A fixed pseudo-random number in [-1, 1] for an index and a seed. Use it for
+// the small per-mode offsets that real wood has (Ren et al. 2013: wood fits
+// the clean damping law worst of five materials).
+//------------------------------------------------------------------------------
+rnd(i, seed) = 2*ma.frac(sin(12.9898*(i + 1) + 78.233*seed)*43758.5453) - 1;
+
+//-------------------------------- noise ---------------------------------------
+// White noise k (0, 1, ...), with its own seed. Do not use no.noises: its
+// generated code relies on signed integer overflow, and with gcc -O2 its
+// output 0 became a constant.
+//------------------------------------------------------------------------------
+noise(k) = no.noise_env(12345 + 7919*k).noise;
+
+//-------------------------------- strike --------------------------------------
+// A mallet strike as a raised-cosine force pulse (van den Doel et al. 2001). The pulse length is the contact time of a Hertz contact,
+// F = K*d^1.5, between a mass m and a rigid surface:
+//   dmax = (5*m*v^2/(4*K))^(2/5),  tau = 2.94*dmax/v.
+// Thus a harder hit (larger v) gives a shorter, brighter pulse, as the
+// nonlinear contact in Chaigne & Doutaut does.
+// The pulse area is v (momentum per unit mass), thus a short pulse has a
+// higher peak but the same low-frequency level.
+// * m: mallet mass in kg (Chaigne: about 0.025).
+// * hard (0-1): contact stiffness from rubber (K = 3.7e7) to boxwood
+//   (K = 1.31e9), Chaigne & Doutaut Table I.
+// * v: strike velocity in m/s (Chaigne: 0.05-1.5).
+// * trig: the pulse starts when trig is 1.
+// The inputs are not held at the trigger: with sample-and-hold, tau became a
+// signal and its pow() was computed for each sample. Thus hard, v and m must
+// be control values (sliders), not smoothed signals.
+//------------------------------------------------------------------------------
+hertzTau(m, K, v) = 2.94*pow(5*m*v*v/(4*K), 0.4)/v;
+hardK(hard) = 3.7e7*pow(1.31e9/3.7e7, max(0, min(1, hard)));
+
+strike(m, hard, v, trig) = (n < tau)*(1 - cos(2*ma.PI*n/tau))*v/tau
+with {
+  tau = max(2, hertzTau(m, hardK(hard), max(v, 0.001))*ma.SR);
+  n = ba.countup(1000000, trig);
+};
+
+// MIDI velocity (gain, 0-1) to strike velocity, 0.05-1.5 m/s on a log scale.
+vel(gain) = 0.05*pow(30, max(0, min(1, gain)));
+
+//-------------------------------- barShape ------------------------------------
+// Free-free bar mode shape n (0, 1, ...) at position x (0 = end,
+// 0.5 = middle), from the asymptotic form of the Euler-Bernoulli solution:
+//   phi(x) = sqrt(2)*cos(b*x + pi/4) + exp(-b*x) + (-1)^n*exp(-b*(1-x)),
+// with b = (n + 1.5)*pi. phi is 2 at the ends. At the middle, the odd modes
+// (antisymmetric) are 0. The value is divided by 2.
+//------------------------------------------------------------------------------
+barShape(n, x) = 0.5*(sqrt(2)*cos(b*x + ma.PI/4) + exp(-b*x) + s*exp(-b*(1 - x)))
+with {
+  b = (n + 1.5)*ma.PI;
+  s = 1 - 2*(n%2);
+};
+
+//------------------------------- barRatio -------------------------------------
+// Mode frequency ratio n (0-7) of a bar with an undercut depth u (0-1).
+// u = 0 is the uniform free bar, 1 : 2.76 : 5.40 : 8.93 ... (Rossing 1982 p2,
+// m^2 with m = 3.0112, 5, 7, 9, ...). u = 1 is the measured E3 marimba bar,
+// 1 : 3.92 : 9.24 : 16.3 : 24.2 : 33.5 : 43.0 (Rossing 1982 Fig. 2; the 8th
+// value is an extrapolation). The ratios are interpolated on a log scale. The
+// xylophone (first overtone at 3, Rossing 1982 p8) is at about u = 0.24.
+//------------------------------------------------------------------------------
+uniformR = (1, 2.757, 5.404, 8.933, 13.345, 18.638, 24.814, 31.871);
+marimbaR = (1, 3.923, 9.237, 16.266, 24.219, 33.544, 42.970, 53.0);
+barRatio(u, n) = pow(ba.take(n + 1, uniformR), 1 - uu)*pow(ba.take(n + 1, marimbaR), uu)
+with { uu = max(0, min(1, u)); };
+
+//------------------------------ noiseModes ------------------------------------
+// The "noise modes" of the perceptual resonator of Menzies 2002, for the
+// diffuse, noise-like part of a hollow wooden body.
+// For each band: band-pass the excitation, follow its level with a leaky
+// integrator, and use that level to modulate the same band of noise.
+// * nb: number of bands. The band centres are fbase*1.62^i.
+// * tau: integrator time constant in seconds at low frequency (Menzies:
+//   about 0.1 s for a door knock).
+// * tilt: the high bands decay faster, with the a2 term of t60law.
+// * x: the excitation.
+//------------------------------------------------------------------------------
+noiseModes(nb, fbase, tau, tilt, x) = par(i, nb, band(i)) :> _
+with {
+  fc(i) = fbase*pow(1.62, i);
+  on(i) = fc(i) < 0.4*ma.SR;
+  bp(i) = fi.resonbp(min(fc(i), 0.4*ma.SR), 1.5, 1);
+  rate(i) = 1/max(tau, 0.002) + a2of(tilt)*fc(i)*fc(i);
+  p(i) = exp(-rate(i)/ma.SR);
+  level(i) = x : bp(i) : abs : + ~ *(p(i));
+  band(i) = level(i)*(noise(i) : bp(i))*on(i);
+};
