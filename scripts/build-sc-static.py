@@ -10,6 +10,7 @@ supercollider.cpp architecture and then faust-static-ugen.py. The output
 folder gets:
 
     src/<class>.cpp         the UGen sources
+    classes/<unit>.sc       the SuperCollider class files, for sclang
     include/faust/...       the Faust headers that the sources include
     isospin.cmake           the source list and build settings, for CMake
     isospin_sc_static.h     the load declarations and Isospin_Load()
@@ -32,6 +33,7 @@ import gzip
 import hashlib
 import importlib.util
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -129,6 +131,97 @@ def header_file(ugens: list[dict], label: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def normalize_name(name: str) -> str:
+    """The unit name that the supercollider.cpp architecture makes from the
+    Faust name: each word capitalised, without "_", "-" and " ", at most 30
+    characters (the same as normalizeClassName in supercollider.cpp)."""
+    out, up = "", True
+    for char in name:
+        if char in "_- ":
+            up = True
+        elif up:
+            out, up = out + char.upper(), False
+        else:
+            out += char
+    return out[:30]
+
+
+def sc_number(value: float) -> str:
+    """A number in sclang syntax, without a ".0" on whole numbers."""
+    value = float(value)
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
+def sc_argument(label: str) -> str:
+    """The class argument name for a Faust control label (the same rule as
+    faust2sc.py): without the characters "\\-_/()[]^", in lower case,
+    spaces as "_"."""
+    for char in "\\-_/([^)]*)":
+        label = label.replace(char, "")
+    return label.lower().replace(" ", "_")
+
+
+def class_file(info: dict, prefix: str) -> tuple[str, str]:
+    """The unit name and the SuperCollider class file for one UGen, from the
+    Faust JSON description. The class arguments are the audio inputs
+    (in0, in1, ...) and then the controls, in the order of the JSON file.
+    This is the order in which the UGen reads its inputs."""
+    unit = (prefix + normalize_name(info["name"]))[:30]
+    (group,) = info["ui"]
+    controls = []
+    for item in group["items"]:
+        if "items" in item:
+            sys.exit(f"{info['name']}: a UI group in a group is not supported; "
+                     "make the controls of the top group flat")
+        controls.append((sc_argument(item["label"]), sc_number(item.get("init", 0))))
+    inputs = [f"in{i}" for i in range(info["inputs"])]
+    names = ", ".join(inputs + [name for name, _ in controls])
+    args = ", ".join(inputs + [f"{name}({default})" for name, default in controls])
+    outputs = info["outputs"]
+
+    lines = [
+        f"// {GENERATED}",
+        f"// The class of the {unit} UGen, made from the Faust description of",
+        f"// {info['filename']}.",
+        f"{unit} : {'MultiOutUGen' if outputs > 1 else 'UGen'} {{",
+        f"    *ar {{ |{args}|",
+        f"        ^this.multiNew('audio', {names})",
+        "    }",
+        "",
+        f"    *kr {{ |{args}|",
+        f"        ^this.multiNew('control', {names})",
+        "    }",
+        "",
+        f'    name {{ ^"{unit}" }}',
+        "",
+        '    info { ^"Generated with Faust" }',
+    ]
+    if info["inputs"] > 0:
+        lines += [
+            "",
+            "    checkInputs {",
+            "        if(rate == 'audio') {",
+            f"            {info['inputs']}.do {{ |i|",
+            "                if(inputs.at(i).rate != 'audio') {",
+            "                    ^(\" input at index \" ++ i ++ \" (\" ++ inputs.at(i) ++ \") is not audio rate\")",
+            "                };",
+            "            };",
+            "        };",
+            "        ^this.checkValidInputs",
+            "    }",
+        ]
+    if outputs > 1:
+        lines += [
+            "",
+            "    init { |... theInputs|",
+            "        inputs = theInputs;",
+            f"        ^this.initOutputs({outputs}, rate)",
+            "    }",
+        ]
+    lines += ["}"]
+    return unit, "\n".join(lines) + "\n"
+
+
 NOTICE = """\
 # isospin: static SuperCollider UGen sources
 
@@ -173,6 +266,16 @@ def generate(dest: Path, label: str, kind: str) -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(rewrite.convert(u["class"], raw.read_text()))
 
+            # A second faust call for the JSON description, so that the C++
+            # call stays the same as before.
+            run("faust", "-json", "-O", tmp, "-o", f"{u['class']}-json.cpp",
+                "-I", str(ROOT), str(ROOT / u["dsp"]))
+            info = json.loads((Path(tmp) / f"{Path(u['dsp']).name}.json").read_text())
+            unit, text = class_file(info, u["prefix"])
+            out = dest / "classes" / f"{unit}.sc"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text)
+
     for header in FAUST_HEADERS:
         out = dest / "include" / header
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +291,7 @@ def generate(dest: Path, label: str, kind: str) -> None:
     shutil.copyfile(ROOT / "LICENSE", dest / "LICENSE")
     listing = "\n".join(f"- `{u['dsp']}`: `src/{u['class']}.cpp`, prefix `{u['prefix']}`"
                         for u in ugens)
+    listing += "\n\nThe SuperCollider class files are in `classes/`."
     (dest / "NOTICE.md").write_text(
         NOTICE.format(generated=GENERATED, label=label, ugens=listing))
 
