@@ -1,0 +1,13 @@
+# The SuperCollider UGens that scripts/build-sc-static.py makes from the Faust
+# instruments. One [[ugen]] table for each UGen.
+#
+# dsp:    the Faust source, relative to the repository root.
+# class:  the class name for Faust (-cn). The static load function is
+#         <class>_Load.
+# prefix: SC_FAUST_PREFIX. Faust puts it before the capitalised Faust name:
+#         with prefix "Phys", the Faust name "woodbar" becomes PhysWoodbar.
+
+[[ugen]]
+dsp = "woodbar.dsp"
+class = "Woodbar"
+prefix = "Phys"

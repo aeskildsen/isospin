@@ -1,0 +1,42 @@
+# Makes a GitHub release when a version tag (v1.2.3) is pushed. The release
+# holds the static SuperCollider UGen sources made by scripts/build-sc-static.py
+# and their SHA-256.
+#
+# Faust comes from a pinned nixpkgs revision, so that the release is the same,
+# byte for byte, as a local build with the same Faust. Change NIXPKGS only on
+# purpose: a new Faust version can change the generated sources.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # nixpkgs with Faust 2.85.9.
+  NIXPKGS: github:NixOS/nixpkgs/7fd4004d0511991fff3a0524856a9be09e28c5f0
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Build the static SuperCollider UGen sources
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" --command \
+            python3 -I scripts/build-sc-static.py --release "$version" --tarball dist
+          cat dist/*.sha256
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "isospin $GITHUB_REF_NAME" \
+            --notes "Static SuperCollider UGen sources (isospin-sc-static), made with $(nix shell "$NIXPKGS#faust" --command faust --version | head -n 1). Check the download with the .sha256 file."
