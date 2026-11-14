@@ -5,6 +5,7 @@
 // AddressSanitizer and UndefinedBehaviorSanitizer. Exit code 0 is a pass.
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "superpos_core.h"
@@ -116,6 +117,198 @@ void testPoolLimit() {
     check(finite, "a dense cloud gives finite output");
 }
 
+// The grain start times of a cloud on a buffer of ones, in samples. The core
+// runs one sample at a time, so that each start has its exact time.
+std::vector<long> startTimes(const superpos::Controls& c, double seconds, uint32_t seed = 1) {
+    static std::vector<float> data(1000, 1.f);
+    const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
+    std::vector<superpos::Grain> pool(kMaxGrains);
+    superpos::Core core;
+    core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+    core.seed(seed, seed * 7u + 11u, seed * 13u + 17u);
+    float out = 0.f;
+    std::vector<long> times;
+    core.prime(ones, c, &out);
+    long started = core.startedGrains();
+    const long total = static_cast<long>(seconds * kSampleRate);
+    for (long t = 0; t < total; ++t) {
+        core.process(ones, c, &out, 1);
+        if (core.startedGrains() != started)
+            times.push_back(t);
+        started = core.startedGrains();
+    }
+    return times;
+}
+
+// The coefficient of variation of the intervals between the start times.
+double intervalVariation(const std::vector<long>& times) {
+    double sum = 0., sum2 = 0.;
+    const size_t n = times.size() - 1;
+    for (size_t i = 0; i < n; ++i) {
+        const double d = static_cast<double>(times[i + 1] - times[i]);
+        sum += d;
+        sum2 += d * d;
+    }
+    const double mean = sum / n;
+    return std::sqrt(sum2 / n - mean * mean) / mean;
+}
+
+bool within(double value, double expected, double part) { return std::fabs(value - expected) <= part * expected; }
+
+// overlap 5 and grainDur 0.05 s give 100 grains a second, 1000 in 10 s.
+const superpos::Controls kTiming { 1.f, 0.05f, 5.f, 0.f, 0.f, 1.f };
+
+void testRegularTiming() {
+    const std::vector<long> times = startTimes(kTiming, 10.);
+    std::printf("timing: regularity 0: %zu grains in 10 s\n", times.size());
+    // A grain each 480 samples; the first at time 0 starts in the primed
+    // sample and is not in the list.
+    check(times.size() == 999 || times.size() == 1000, "regularity 0: overlap / grainDur grains a second");
+    bool fixed = true;
+    for (size_t i = 1; i < times.size(); ++i)
+        fixed = fixed && std::labs(times[i] - times[i - 1] - 480) <= 1;
+    check(fixed, "regularity 0: a fixed interval");
+}
+
+void testRandomTiming() {
+    for (float regularity : { 0.5f, 1.f }) {
+        superpos::Controls c = kTiming;
+        c.regularity = regularity;
+        const std::vector<long> times = startTimes(c, 10.);
+        const double variation = intervalVariation(times);
+        std::printf("timing: regularity %.1f: %zu grains in 10 s, interval variation %.3f\n",
+                    regularity, times.size(), variation);
+        check(within(times.size(), 1000., 0.05), "random timing keeps the mean rate within 5 %");
+        // The interval is (1 - r) + r * E with E exponential (standard
+        // deviation 1), so its coefficient of variation is r.
+        check(within(variation, regularity, 0.1), "the interval variation is the regularity");
+    }
+}
+
+void testProbability() {
+    for (float regularity : { 0.f, 1.f }) {
+        superpos::Controls c = kTiming;
+        c.regularity = regularity;
+        c.probability = 0.5f;
+        const std::vector<long> times = startTimes(c, 10.);
+        std::printf("timing: probability 0.5, regularity %.0f: %zu grains in 10 s\n", regularity,
+                    times.size());
+        check(within(times.size(), 500., 0.05), "probability 0.5 starts half of the grains, within 5 %");
+    }
+    superpos::Controls never = kTiming;
+    never.probability = 0.f;
+    check(startTimes(never, 1.).empty(), "probability 0 starts no grain");
+    never.probability = NAN;
+    check(startTimes(never, 1.).empty(), "probability NaN starts no grain");
+}
+
+void testSeed() {
+    superpos::Controls c = kTiming;
+    c.regularity = 1.f;
+    c.probability = 0.7f;
+    check(startTimes(c, 2., 5) == startTimes(c, 2., 5), "the same seed gives the same grain times");
+    check(startTimes(c, 2., 5) != startTimes(c, 2., 6), "another seed gives other grain times");
+}
+
+// Controls that give no grains (grainDur 0, an infinite pointer rate, NaN)
+// must not stop the cloud for good: valid controls start grains again.
+void testRecovery() {
+    std::vector<float> data(1000, 1.f);
+    const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
+    std::vector<superpos::Grain> pool(kMaxGrains);
+    superpos::Core core;
+    core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+    std::vector<float> block(kBlock);
+    const float inf = INFINITY;
+    const superpos::Controls bad[] = {
+        { 1.f, 0.f, 5.f, 0.f },
+        { inf, 0.05f, 5.f, 0.f },
+        { NAN, NAN, NAN, NAN, NAN, NAN },
+        { 1.f, 0.05f, inf, inf },
+    };
+    core.prime(ones, bad[0], block.data());
+    for (const superpos::Controls& c : bad)
+        for (int k = 0; k < 20; ++k)
+            core.process(ones, c, block.data(), kBlock);
+    const long before = core.startedGrains();
+    float peak = 0.f;
+    for (int k = 0; k < 200; ++k) {
+        core.process(ones, kTiming, block.data(), kBlock);
+        for (float v : block)
+            peak = std::fmax(peak, std::fabs(v));
+    }
+    std::printf("recovery: %ld grains after valid controls, peak %.3f\n", core.startedGrains() - before, peak);
+    check(core.startedGrains() - before > 20, "valid controls start grains again");
+    check(peak > 0.5f, "valid controls give sound again");
+}
+
+// The expected window at sample k of a grain of n samples, for a texture.
+double expectedWindow(float texture, int k, int n) {
+    const double t = 2. * (k + 1) / n;
+    const double x = t < 1. ? t : 2. - t;
+    const double s = std::sin(M_PI * (k + 1) / n);
+    const double hann = s * s;
+    if (texture < 0.5f)
+        return std::fmin(1., x * 0.5 / (texture + 0.01));
+    return x + (texture - 0.5) * 2. * (hann - x);
+}
+
+// One grain on a buffer of ones gives its window, for each texture.
+void testTextureShapes() {
+    std::vector<float> data(1000, 1.f);
+    const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
+    const int n = 480;
+    for (float texture : { 0.f, 0.25f, 0.5f, 0.75f, 1.f }) {
+        superpos::Controls c { 1.f, 0.01f, 0.5f, 0.f };
+        c.texture = texture;
+        const std::vector<float> out = render(ones, c, 900);
+        double worst = 0.;
+        for (int k = 1; k < n; ++k)
+            worst = std::fmax(worst, std::fabs(out[k - 1] - expectedWindow(texture, k, n)));
+        std::printf("texture %.2f: largest difference from the window formula %.2e\n", texture, worst);
+        check(worst < 1e-5, "one grain has the window of its texture");
+    }
+}
+
+// The texture is read when a grain starts: a change during a grain does not
+// change that grain, and the next grain has the new window.
+void testTextureHeldPerGrain() {
+    std::vector<float> data(1000, 1.f);
+    const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
+    superpos::Controls steep { 1.f, 0.01f, 0.5f, 0.f };
+    steep.texture = 0.f;
+    superpos::Controls smooth = steep;
+    smooth.texture = 1.f;
+    // Grains of 480 samples, one each 960 samples. The first starts in the
+    // primed sample, so its window sample k is at out[k - 1]. The second
+    // starts at out[960] or one sample later (float rounding of the trigger
+    // phase). The texture changes in the third block, during the first grain.
+    std::vector<superpos::Grain> pool(kMaxGrains);
+    superpos::Core core;
+    core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+    float first = 0.f;
+    core.prime(ones, steep, &first);
+    std::vector<float> out;
+    std::vector<float> block(kBlock);
+    for (int b = 0; b < 1536 / kBlock; ++b) {
+        core.process(ones, b < 2 ? steep : smooth, block.data(), kBlock);
+        out.insert(out.end(), block.begin(), block.end());
+    }
+    double firstGrain = 0., secondGrain = 0.;
+    for (int k = 1; k < 480; ++k)
+        firstGrain = std::fmax(firstGrain, std::fabs(out[k - 1] - expectedWindow(0.f, k, 480)));
+    int start = 900;
+    while (start < 1000 && out[start] == 0.f)
+        ++start;
+    check(start == 960 || start == 961, "the second grain starts one interval after the first");
+    for (int k = 0; k < 480; ++k)
+        secondGrain = std::fmax(secondGrain, std::fabs(out[start + k] - expectedWindow(1.f, k, 480)));
+    std::printf("texture change: first grain %.2e from the steep window, second grain %.2e from Hann\n",
+                firstGrain, secondGrain);
+    check(firstGrain < 1e-5, "a texture change during a grain does not change that grain");
+    check(secondGrain < 1e-5, "the next grain has the new texture");
+}
+
 } // namespace
 
 int main() {
@@ -123,6 +316,13 @@ int main() {
     testStereoBuffer();
     testWindowShape();
     testPoolLimit();
+    testRegularTiming();
+    testRandomTiming();
+    testProbability();
+    testSeed();
+    testRecovery();
+    testTextureShapes();
+    testTextureHeldPerGrain();
     std::printf("%s\n", failures ? "superpos_core_test: FAIL" : "superpos_core_test: OK");
     return failures ? 1 : 0;
 }

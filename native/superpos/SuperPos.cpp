@@ -10,6 +10,12 @@
 //   2 grainDur     the grain duration in seconds
 //   3 overlap      grains at the same time, on average
 //   4 transpose    semitones
+//   5 regularity   0 = a fixed grain interval, 1 = random intervals
+//   6 probability  the chance that a trigger starts a grain
+//   7 texture      the window shape: 0 = a steep trapezoid, 0.5 = a triangle,
+//                  1 = a Hann window; read when a grain starts
+//
+// A SynthDef with fewer inputs gets the default value of each missing input.
 #include <SC_PlugIn.hpp>
 
 #include <cmath>
@@ -33,6 +39,12 @@ public:
         ClearUnitIfMemFailed(mPool);
 
         mCore.init(mPool, kMaxGrains, sampleRate(), bufferSize());
+        // The random generator of the synth: RandSeed sets it.
+        RGen& rgen = *mParent->mRGen;
+        const uint32 a = rgen.trand();
+        const uint32 b = rgen.trand();
+        const uint32 c = rgen.trand();
+        mCore.seed(a, b, c);
         mCalcFunc = make_calc_function<SuperPos, &SuperPos::next>();
 
         // The first output sample, as the UGens that the core copies make it
@@ -50,7 +62,11 @@ public:
     SndBuf* m_buf;
 
 private:
-    superpos::Controls controls() const { return { in0(1), in0(2), in0(3), in0(4) }; }
+    float input(int index, float otherwise) const { return numInputs() > index ? in0(index) : otherwise; }
+
+    superpos::Controls controls() const {
+        return { in0(1), in0(2), in0(3), in0(4), input(5, 0.f), input(6, 1.f), input(7, 1.f) };
+    }
 
     void next(int numSamples) { run<false>(numSamples); }
 
