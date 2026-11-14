@@ -53,6 +53,10 @@
 // not correlated (a noise buffer, or a pointer that does not move with the
 // grains) the level then stays the same at all overlaps. With normalize off
 // the output is the plain sum of the grains.
+//
+// Load: the pool has a fixed size. When it is full, a new grain does not
+// start (the grains that play are not cut). All grains use the same linear
+// interpolation at all loads, so a dense cloud sounds as a sparse one.
 
 #include <cstdint>
 
@@ -200,6 +204,11 @@ public:
 
     int activeGrains() const { return mNumActive; }
 
+    // The number of grains that could not start because the pool was full,
+    // since init(), for tests.
+    long droppedGrains() const { return mDropped; }
+
+
     // The number of grains that started since init(), for tests.
     long startedGrains() const { return mStarted; }
 
@@ -232,6 +241,7 @@ private:
     Source mSource;
     Random mRandom;
     long mStarted = 0;
+    long mDropped = 0;
     GrainStart mLastStart {};
 
     // The level control: the smoothed grain count, the gain, and the

@@ -189,6 +189,7 @@ void playGrain(Grain& g, const BufferView& buf, float* left, float* right, int c
     g.counter -= count;
 }
 
+
 } // namespace
 
 void Random::seed(uint32_t a, uint32_t b, uint32_t c) {
@@ -286,6 +287,7 @@ double LiveSource::place(const BufferView& buf, bool scattered, double scatterFr
 template <class Source> void Engine<Source>::init(Grain* pool, int maxGrains, double sampleRate, int blockSize) {
     mPool = pool;
     mMaxGrains = std::max(0, maxGrains);
+    mDropped = 0;
     mNumActive = 0;
     mSampleRate = sampleRate;
     mSampleDur = 1. / sampleRate;
@@ -425,8 +427,12 @@ template <class Source> void Engine<Source>::playActive(const BufferView& buf, f
 template <class Source>
 void Engine<Source>::startGrain(const BufferView& buf, const Controls& c, float* left, float* right, int offset,
                                 int n) {
-    if (mNumActive >= mMaxGrains || !usableBuffer(buf))
+    if (!usableBuffer(buf))
         return;
+    if (mNumActive >= mMaxGrains) {
+        ++mDropped;
+        return;
+    }
 
     // The random values of the grain, in the order detune, scatter, pan. A
     // control at 0 takes no random value, so that the output with all of

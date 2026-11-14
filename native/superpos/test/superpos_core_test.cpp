@@ -38,10 +38,10 @@ superpos::Controls hardLeft(superpos::Controls c) {
 // pointer of the file source moves at `pointerRate`.
 std::vector<float> render(const superpos::BufferView& buf, const superpos::Controls& c, int total,
                           int* maxActive = nullptr, std::vector<float>* rightOut = nullptr,
-                          float pointerRate = 1.f) {
-    std::vector<superpos::Grain> pool(kMaxGrains);
+                          float pointerRate = 1.f, int poolSize = kMaxGrains) {
+    std::vector<superpos::Grain> pool(poolSize);
     superpos::Core core;
-    core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+    core.init(pool.data(), poolSize, kSampleRate, kBlock);
     core.source().setPointerRate(pointerRate);
     float primedLeft = 0.f, primedRight = 0.f;
     core.prime(buf, c, &primedLeft, &primedRight);
@@ -514,6 +514,50 @@ void testNormalizeOff() {
     check(scaled[4000] < 4.f, "normalize 1 scales the sum");
 }
 
+// A small pool in a dense cloud: the pool stays full, new grains are
+// dropped, and the grains that play are not cut, so there is no click. The
+// buffer is a slow sine, so the output can change only slowly: in one sample
+// each grain changes by at most the slope of its window (pi / length) plus
+// the slope of the sine. A cut grain would jump by up to its amplitude.
+void testFullPool() {
+    std::vector<float> data(96000);
+    const double step = 0.01;
+    for (size_t i = 0; i < data.size(); ++i)
+        data[i] = static_cast<float>(std::sin(i * step));
+    const superpos::BufferView buf { data.data(), 96000, 1, kSampleRate };
+    const int poolSize = 8;
+    std::vector<superpos::Grain> pool(poolSize);
+    superpos::Core core;
+    core.init(pool.data(), poolSize, kSampleRate, kBlock);
+    superpos::Controls c = hardLeft({ 0.1f, 40.f, 0.f });
+    c.normalize = 0.f;
+    float left[kBlock], right[kBlock];
+    core.prime(buf, c, left, right);
+    float previous = left[0];
+    double worstStep = 0., peak = 0.;
+    int most = 0;
+    long fullBlocks = 0;
+    for (int b = 0; b < 1500; ++b) {
+        core.process(buf, c, left, right, kBlock);
+        for (int i = 0; i < kBlock; ++i) {
+            worstStep = std::fmax(worstStep, std::fabs(left[i] - previous));
+            peak = std::fmax(peak, std::fabs(left[i]));
+            previous = left[i];
+        }
+        most = std::max(most, core.activeGrains());
+        fullBlocks += core.activeGrains() == poolSize;
+    }
+    const double grainSlope = M_PI / 4800. + step;
+    std::printf("full pool: %ld grains dropped, %ld started, at most %d active, "
+                "full in %ld of 1500 blocks; largest step %.4f (limit %.4f), peak %.2f\n",
+                core.droppedGrains(), core.startedGrains(), most, fullBlocks, worstStep,
+                poolSize * grainSlope, peak);
+    check(most <= poolSize, "the active grains stay within the pool");
+    check(core.droppedGrains() > 100 && fullBlocks > 1000, "a dense cloud keeps the pool full and drops grains");
+    check(worstStep <= poolSize * grainSlope, "dropped grains make no click");
+    check(peak > 1., "the full pool plays");
+}
+
 } // namespace
 
 int main() {
@@ -533,6 +577,7 @@ int main() {
     testRandomRanges();
     testLevel();
     testNormalizeOff();
+    testFullPool();
     std::printf("%s\n", failures ? "superpos_core_test: FAIL" : "superpos_core_test: OK");
     return failures ? 1 : 0;
 }

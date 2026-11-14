@@ -21,6 +21,8 @@
 //  10 pan          -1 = left, 1 = right
 //  11 stereoSpread each grain pans to a random value in pan +- stereoSpread
 //  12 normalize    1 = scale the output by 1 / sqrt(active grains), 0 = off
+//  13 maxGrains    the size of the grain pool (1 to 1024), read once when the
+//                  UGen starts; when it is full, new grains are dropped
 //
 // Outputs: 0 left, 1 right.
 //
@@ -34,7 +36,7 @@ namespace {
 
 class SuperPos : public superpos::GrainUnit<superpos::Core> {
 public:
-    SuperPos() {
+    SuperPos() : GrainUnit(13) {
         if (!mPool) {
             failed();
             return;

@@ -14,6 +14,7 @@
 //                  (a part of the buffer length behind the record head)
 //   4 grainDur ... 14 normalize: the engine controls, as SuperPos inputs
 //                  2 to 12 (see superpos_unit.h)
+//  15 maxGrains    the size of the grain pool, as SuperPos input 13
 //
 // Outputs: 0 left, 1 right.
 #include "superpos_unit.h"
@@ -22,7 +23,7 @@ namespace {
 
 class SuperPosLive : public superpos::GrainUnit<superpos::LiveCore> {
 public:
-    SuperPosLive() {
+    SuperPosLive() : GrainUnit(15) {
         if (!mPool) {
             failed();
             return;

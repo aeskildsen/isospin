@@ -8,7 +8,8 @@
 // order: grainDur, overlap, transpose, regularity, probability, texture,
 // detuneStep, scatter, pan, stereoSpread, normalize. A SynthDef with fewer
 // inputs (made with an older class file) gets the default value of each
-// missing input after transpose.
+// missing input after transpose. After the engine controls comes maxGrains,
+// the size of the grain pool, read once when the UGen starts.
 #pragma once
 
 #include <SC_PlugIn.hpp>
@@ -28,17 +29,22 @@ public:
     SndBuf* m_buf = nullptr;
 
 protected:
-    // The size of the grain pool.
-    static constexpr int kMaxGrains = 64;
+    // The pool size when the input is not there, and the limits of the input.
+    static constexpr int kDefaultGrains = 64;
+    static constexpr int kMaxGrains = 1024;
 
-    // Gets the pool from the real-time memory and seeds the engine. When the
-    // memory is full, the pool is null: the UGen must then call
-    // failed() and do no more.
-    GrainUnit() {
-        mPool = static_cast<Grain*>(RTAlloc(mWorld, kMaxGrains * sizeof(Grain)));
+    // Gets the pool from the real-time memory and seeds the engine. The pool
+    // size is input `maxGrainsInput`. When the memory is full, the pool is
+    // null: the UGen must then call failed() and do no more.
+    explicit GrainUnit(int maxGrainsInput) {
+        const float size = input(maxGrainsInput, kDefaultGrains);
+        // NaN gives the default.
+        const int poolSize = std::isnan(size) ? kDefaultGrains
+                                              : static_cast<int>(std::lround(std::fmin(std::fmax(size, 1.f), kMaxGrains)));
+        mPool = static_cast<Grain*>(RTAlloc(mWorld, poolSize * sizeof(Grain)));
         if (!mPool)
             return;
-        mCore.init(mPool, kMaxGrains, sampleRate(), bufferSize());
+        mCore.init(mPool, poolSize, sampleRate(), bufferSize());
         // The random generator of the synth: RandSeed sets it.
         RGen& rgen = *mParent->mRGen;
         const uint32 a = rgen.trand();

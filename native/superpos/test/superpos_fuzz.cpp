@@ -8,9 +8,12 @@
 // it checks that:
 //
 //   - each output sample is finite;
-//   - no output sample is larger than the pool size times the buffer peak
-//     (each grain adds at most the buffer peak; the core has no level
-//     control).
+//   - no output sample is larger than the buffer peak times the number of
+//     grains that can sound in the block: the active grains at its start
+//     plus the grains that start in it (each grain adds at most the buffer
+//     peak). A grain that ends in the block where it starts leaves the pool
+//     at once, as in GrainBuf, so a new grain can sound in the same samples;
+//     the pool size alone is not a limit.
 //
 // scripts/check-native.py builds it with AddressSanitizer and
 // UndefinedBehaviorSanitizer, which stop it at a bad memory access or
@@ -234,19 +237,22 @@ struct LiveMode {
 // with another buffer while the grains of the first one still play. The
 // controls change between the blocks.
 template <class Mode>
-bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& second, long set,
-            Coverage& coverage, Failure& failure) {
+bool runSet(Dice& dice, TestBuffer& first, TestBuffer& second, long set, Coverage& coverage, Failure& failure) {
     typename Mode::Engine core;
     Mode mode;
-    core.init(pool, kMaxGrains, kSampleRate, kBlock);
+    // A pool of 1 to kMaxGrains grains, in new memory of the exact size, so
+    // that AddressSanitizer sees a write past its end.
+    const int poolSize = 1 + dice.below(kMaxGrains);
+    std::vector<superpos::Grain> pool(poolSize);
+    core.init(pool.data(), poolSize, kSampleRate, kBlock);
     core.seed(static_cast<uint32_t>(dice.next()), static_cast<uint32_t>(dice.next()),
               static_cast<uint32_t>(dice.next()));
     randomBuffer(dice, first);
     randomBuffer(dice, second);
 
     float left[kBlock], right[kBlock];
-    const auto checkBlock = [&](int n, float peak) {
-        const float limit = kMaxGrains * peak * 1.0001f;
+    const auto checkBlock = [&](int n, float peak, long sounding) {
+        const float limit = sounding * peak * 1.0001f;
         for (const float* out : { left, right }) {
             for (int i = 0; i < n; ++i) {
                 if (!std::isfinite(out[i])) {
@@ -267,9 +273,9 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
     mode.draw(dice, pointerRate);
     mode.apply(core, first, dice, 1);
     core.prime(first.view, c, left, right);
-    if (!checkBlock(1, Mode::peak(first)))
+    if (!checkBlock(1, Mode::peak(first), core.startedGrains()))
         return false;
-    bool fullPool = core.activeGrains() == kMaxGrains;
+    bool fullPool = core.activeGrains() == poolSize;
     const int blocks = 1 + dice.below(6);
     for (int k = 0; k < 2 * blocks; ++k) {
         TestBuffer& b = k < blocks ? first : second;
@@ -282,14 +288,16 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
         }
         const int n = 1 + dice.below(kBlock);
         mode.apply(core, b, dice, n);
+        const long activeBefore = core.activeGrains();
+        const long startedBefore = core.startedGrains();
         core.process(b.view, c, left, right, n);
-        if (!checkBlock(n, peak))
+        if (!checkBlock(n, peak, activeBefore + core.startedGrains() - startedBefore))
             return false;
-        if (core.activeGrains() < 0 || core.activeGrains() > kMaxGrains) {
+        if (core.activeGrains() < 0 || core.activeGrains() > poolSize) {
             failure = { set, "the active grain count is outside the pool", static_cast<float>(core.activeGrains()) };
             return false;
         }
-        fullPool = fullPool || core.activeGrains() == kMaxGrains;
+        fullPool = fullPool || core.activeGrains() == poolSize;
     }
     coverage.grains += core.startedGrains();
     coverage.setsWithGrains += core.startedGrains() > 0;
@@ -302,7 +310,6 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
 int main(int argc, char** argv) {
     const long sets = argc > 1 ? std::atol(argv[1]) : 1000000;
     const uint64_t seed = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
-    std::vector<superpos::Grain> pool(kMaxGrains);
     TestBuffer first, second;
     // Each source has its own random sequence, so that a change of one does
     // not change the run of the other.
@@ -312,7 +319,7 @@ int main(int argc, char** argv) {
         Coverage coverage;
         Failure failure {};
         for (long set = 0; set < sets; ++set) {
-            if (!runSet<Mode>(dice, pool.data(), first, second, set, coverage, failure)) {
+            if (!runSet<Mode>(dice, first, second, set, coverage, failure)) {
                 std::printf("superpos_fuzz: FAIL (%s source) at set %ld (seed %llu): %s (%g)\n", Mode::name,
                             failure.set, static_cast<unsigned long long>(seed), failure.what, failure.value);
                 return false;

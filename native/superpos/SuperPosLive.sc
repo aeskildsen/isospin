@@ -12,9 +12,9 @@
 SuperPosLive : MultiOutUGen {
     *ar { |in = 0, bufnum = 0, freeze = 0, position = 0, grainDur = 0.025, overlap = 5, transpose = 0,
             regularity = 0, probability = 1, texture = 1,
-            detuneStep = 0, scatter = 0, pan = 0, stereoSpread = 0, normalize = 1|
+            detuneStep = 0, scatter = 0, pan = 0, stereoSpread = 0, normalize = 1, maxGrains = 64|
         ^this.multiNew('audio', bufnum, in, freeze, position, grainDur, overlap, transpose,
-            regularity, probability, texture, detuneStep, scatter, pan, stereoSpread, normalize)
+            regularity, probability, texture, detuneStep, scatter, pan, stereoSpread, normalize, maxGrains)
     }
 
     init { |... theInputs|
