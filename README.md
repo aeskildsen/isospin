@@ -10,7 +10,7 @@ This repository holds the DSP sources and the scripts that make host code from t
 |---|---|
 | `woodbar.dsp` | A struck wooden bar: claves, wood stick, xylophone or marimba bar. Modal bar with the wood damping law and a Hertz-timed mallet. |
 | `wood.lib` | Shared parts for the wooden instruments: damping law, mallet strike, noise modes. |
-| `native/superpos/` | SuperPos, a granular UGen in hand-written C++: overlapping grains from a mono buffer, started at a moving read pointer. Its output is the same as a graph of SuperCollider's `Impulse`, `Phasor` and `GrainBuf` (see `superpos_core.h`). Work in progress. |
+| `native/superpos/` | SuperPos, a granular UGen in hand-written C++: overlapping grains from a mono buffer, started at a moving read pointer, with random grain times (`regularity`, `probability`), a window shape (`texture`) and a level control by `1/√n` (`normalize`) as in Mutable Instruments Clouds, and with per-grain detune, scatter and pan in stereo. With `normalize` 0 and the other controls at their defaults, its output is the same as a graph of SuperCollider's `Impulse`, `Phasor` and two-channel `GrainBuf` (see `superpos_core.h`). SuperPosLive uses the same grain engine on a circular record buffer: it records its input (any signal: a bus, a UGen, a device input), with freeze, and its grains never read across the record head. Work in progress. |
 
 ## Try it
 
@@ -48,7 +48,7 @@ A UGen can also be hand-written C++ (a `[[native]]` table in `supercollider.toml
 
 ### Build checks
 
-`scripts/check-native.py` makes a development build and compiles every UGen source two ways: against stock SuperCollider headers (linked into a loadable scsynth plugin) and against SuperSonic's headers with the defines of its engine. Then it runs the tests of the hand-written UGens with AddressSanitizer and UndefinedBehaviorSanitizer. By default it uses `tests/fixtures/supercollider.toml`, which has a hand-written test UGen next to woodbar; `--manifest supercollider.toml` checks the release list.
+`scripts/check-native.py` makes a development build and compiles every UGen source two ways: against stock SuperCollider headers (linked into a loadable scsynth plugin) and against SuperSonic's headers with the defines of its engine. Then it runs the tests of the hand-written UGens with AddressSanitizer and UndefinedBehaviorSanitizer (with `float-cast-overflow`). SuperPos has a fuzz test among them, `native/superpos/test/superpos_fuzz.cpp`; the checks run it with 10⁶ parameter sets and seed 1, and `superpos_fuzz <sets> <seed>` gives a longer run. By default it uses `tests/fixtures/supercollider.toml`, which has a hand-written test UGen next to woodbar; `--manifest supercollider.toml` checks the release list.
 
 ```sh
 python3 -I scripts/check-native.py \
