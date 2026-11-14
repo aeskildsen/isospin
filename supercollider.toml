@@ -1,11 +1,29 @@
-# The SuperCollider UGens that scripts/build-sc-static.py makes from the Faust
-# instruments. One [[ugen]] table for each UGen.
+# The static SuperCollider UGens of the release (scripts/build-sc-static.py).
+# Paths are relative to the repository root.
 #
-# dsp:    the Faust source, relative to the repository root.
+# A UGen made from a Faust instrument: one [[ugen]] table.
+#
+# dsp:    the Faust source.
 # class:  the class name for Faust (-cn). The static load function is
 #         <class>_Load.
 # prefix: SC_FAUST_PREFIX. Faust puts it before the capitalised Faust name:
 #         with prefix "Phys", the Faust name "woodbar" becomes PhysWoodbar.
+#
+# A hand-written C++ UGen: one [[native]] table. The release gets its sources
+# and the headers of its folder in src/<name>/, without change. See
+# native/include/isospin/sc_plugin_table.h for the rules of the wrapper
+# source; tests/fixtures/native/fixture is a small example.
+#
+# name:    the folder name in the output (src/<name>/).
+# dir:     the folder of the UGen.
+# core:    the DSP core sources, relative to dir. They must not include
+#          SuperCollider headers, so that the tests can use them alone.
+# plugin:  the UGen wrapper sources, relative to dir.
+# classes: the SuperCollider class files, relative to dir.
+# load:    the load function, with C++ linkage: void <load>(InterfaceTable*).
+# tests:   test programs, relative to dir, usually in its test/ folder. Each
+#          is built with the core sources and the sanitizers and must exit
+#          with 0 (scripts/check-native.py). They are not in the release.
 
 [[ugen]]
 dsp = "woodbar.dsp"
