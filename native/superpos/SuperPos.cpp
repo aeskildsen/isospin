@@ -25,66 +25,34 @@
 // Outputs: 0 left, 1 right.
 //
 // A SynthDef with fewer inputs gets the default value of each missing input.
-#include <SC_PlugIn.hpp>
+#include "superpos_unit.h"
 
-#include <cmath>
-
-#include <isospin/sc_plugin_table.h>
-
-#include "superpos_core.h"
+// Registers SuperPosLive (SuperPosLive.cpp).
+void SuperPosLive_Register(InterfaceTable* inTable);
 
 namespace {
 
-// The size of the grain pool.
-constexpr int kMaxGrains = 64;
-
-class SuperPos : public SCUnit {
+class SuperPos : public superpos::GrainUnit<superpos::Core> {
 public:
     SuperPos() {
-        SuperPos* unit = this;
-        m_fbufnum = -1e9f;
-        m_buf = nullptr;
-        mPool = static_cast<superpos::Grain*>(RTAlloc(mWorld, kMaxGrains * sizeof(superpos::Grain)));
-        ClearUnitIfMemFailed(mPool);
-
-        mCore.init(mPool, kMaxGrains, sampleRate(), bufferSize());
-        // The random generator of the synth: RandSeed sets it.
-        RGen& rgen = *mParent->mRGen;
-        const uint32 a = rgen.trand();
-        const uint32 b = rgen.trand();
-        const uint32 c = rgen.trand();
-        mCore.seed(a, b, c);
+        if (!mPool) {
+            failed();
+            return;
+        }
         mCalcFunc = make_calc_function<SuperPos, &SuperPos::next>();
-
         // The first output sample, as the UGens that the core copies make it
-        // in their constructors (see superpos::Core::prime).
+        // in their constructors (see superpos::Engine::prime).
         run<true>(1);
     }
 
-    ~SuperPos() {
-        if (mPool)
-            RTFree(mWorld, mPool);
-    }
-
-    // The buffer macros of SuperCollider read these two fields.
-    float m_fbufnum;
-    SndBuf* m_buf;
-
 private:
-    float input(int index, float otherwise) const { return numInputs() > index ? in0(index) : otherwise; }
-
-    superpos::Controls controls() const {
-        return { in0(1), in0(2), in0(3), in0(4), input(5, 0.f), input(6, 1.f), input(7, 1.f),
-                 input(8, 0.f), input(9, 0.f), input(10, 0.f), input(11, 0.f), input(12, 1.f) };
-    }
-
     void next(int numSamples) { run<false>(numSamples); }
 
     template <bool Prime> void run(int numSamples) {
         SuperPos* unit = this;
         // A buffer number that is not a number, or too large for an int,
         // gives silence.
-        if (!(std::fabs(in0(0)) < 2.0e9f)) {
+        if (badBufferNumber()) {
             ClearUnitOutputs(unit, numSamples);
             return;
         }
@@ -92,14 +60,12 @@ private:
         // block.
         GET_BUF_SHARED
         const superpos::BufferView view { bufData, bufFrames, bufChannels, buf->samplerate };
+        mCore.source().setPointerRate(in0(1));
         if (Prime)
-            mCore.prime(view, controls(), out(0), out(1));
+            mCore.prime(view, controls(2), out(0), out(1));
         else
-            mCore.process(view, controls(), out(0), out(1), numSamples);
+            mCore.process(view, controls(2), out(0), out(1), numSamples);
     }
-
-    superpos::Grain* mPool = nullptr;
-    superpos::Core mCore;
 };
 
 } // namespace
@@ -107,4 +73,5 @@ private:
 void SuperPos_Load(InterfaceTable* inTable) {
     ISOSPIN_KEEP_TABLE(inTable);
     registerUnit<SuperPos>(inTable, "SuperPos");
+    SuperPosLive_Register(inTable);
 }

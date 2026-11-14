@@ -16,9 +16,13 @@
 // UndefinedBehaviorSanitizer, which stop it at a bad memory access or
 // undefined behaviour.
 //
+// It runs the sets with each source of the engine: the file source
+// (SuperPos) and the live source (SuperPosLive), which also writes a random
+// input into the buffer.
+//
 // Usage: superpos_fuzz [sets] [seed]
-// The defaults (1000000 sets, seed 1) are the run of the build checks. A
-// different seed or more sets give a longer run.
+// The defaults (1000000 sets for each source, seed 1) are the run of the
+// build checks. A different seed or more sets give a longer run.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -91,9 +95,10 @@ float control(Dice& dice, double lo, double hi) {
     return static_cast<float>(dice.range(lo, hi));
 }
 
-superpos::Controls randomControls(Dice& dice) {
+// Random controls of the engine and of the file source.
+superpos::Controls randomControls(Dice& dice, float& pointerRate) {
     superpos::Controls c;
-    c.pointerRate = control(dice, -4., 4.);
+    pointerRate = control(dice, -4., 4.);
     c.grainDur = control(dice, 0.001, 1.);
     c.overlap = control(dice, 0., 80.);
     c.transpose = control(dice, -48., 48.);
@@ -184,12 +189,55 @@ struct Failure {
     float value;
 };
 
+// The file source (SuperPos): the read pointer speed from randomControls().
+struct FileMode {
+    using Engine = superpos::Core;
+    static constexpr const char* name = "file";
+    float pointerRate = 1.f;
+
+    void draw(Dice&, float rate) { pointerRate = rate; }
+
+    void apply(Engine& core, TestBuffer&, Dice&, int) { core.source().setPointerRate(pointerRate); }
+
+    // The largest value that a grain can read.
+    static float peak(const TestBuffer& b) { return b.peak; }
+};
+
+// The live source (SuperPosLive): it writes a random input (finite, at most 1
+// in magnitude) into the buffer. Sometimes the input is one value for the
+// block, as an input that is not at audio rate.
+struct LiveMode {
+    using Engine = superpos::LiveCore;
+    static constexpr const char* name = "live";
+    float freeze = 0.f, position = 0.f;
+    bool constant = false;
+    float in[kBlock];
+
+    void draw(Dice& dice, float) {
+        freeze = control(dice, 0., 1.);
+        position = control(dice, 0., 1.);
+        constant = dice.below(4) == 0;
+    }
+
+    void apply(Engine& core, TestBuffer& b, Dice& dice, int n) {
+        for (int i = 0; i < n; ++i)
+            in[i] = static_cast<float>(dice.range(-1., 1.));
+        float* data = b.view.frames > 0 && !b.data.empty() ? b.data.data() : nullptr;
+        core.source().setInput(in, constant ? 0 : 1, data, freeze, position);
+    }
+
+    // The input writes values of at most 1 into the buffer.
+    static float peak(const TestBuffer& b) { return std::fmax(b.peak, 1.f); }
+};
+
 // Runs one parameter set: a few blocks with one buffer, then a few blocks
 // with another buffer while the grains of the first one still play. The
 // controls change between the blocks.
+template <class Mode>
 bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& second, long set,
             Coverage& coverage, Failure& failure) {
-    superpos::Core core;
+    typename Mode::Engine core;
+    Mode mode;
     core.init(pool, kMaxGrains, kSampleRate, kBlock);
     core.seed(static_cast<uint32_t>(dice.next()), static_cast<uint32_t>(dice.next()),
               static_cast<uint32_t>(dice.next()));
@@ -214,20 +262,26 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
         return true;
     };
 
-    superpos::Controls c = randomControls(dice);
+    float pointerRate = 1.f;
+    superpos::Controls c = randomControls(dice, pointerRate);
+    mode.draw(dice, pointerRate);
+    mode.apply(core, first, dice, 1);
     core.prime(first.view, c, left, right);
-    if (!checkBlock(1, first.peak))
+    if (!checkBlock(1, Mode::peak(first)))
         return false;
     bool fullPool = core.activeGrains() == kMaxGrains;
     const int blocks = 1 + dice.below(6);
     for (int k = 0; k < 2 * blocks; ++k) {
-        const TestBuffer& b = k < blocks ? first : second;
+        TestBuffer& b = k < blocks ? first : second;
         // The output can hold grains of both buffers in the first block after
         // the change.
-        const float peak = std::fmax(first.peak, second.peak);
-        if (dice.below(3) == 0)
-            c = randomControls(dice);
+        const float peak = std::fmax(Mode::peak(first), Mode::peak(second));
+        if (dice.below(3) == 0) {
+            c = randomControls(dice, pointerRate);
+            mode.draw(dice, pointerRate);
+        }
         const int n = 1 + dice.below(kBlock);
+        mode.apply(core, b, dice, n);
         core.process(b.view, c, left, right, n);
         if (!checkBlock(n, peak))
             return false;
@@ -248,20 +302,29 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
 int main(int argc, char** argv) {
     const long sets = argc > 1 ? std::atol(argv[1]) : 1000000;
     const uint64_t seed = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
-    Dice dice(seed);
     std::vector<superpos::Grain> pool(kMaxGrains);
     TestBuffer first, second;
-    Coverage coverage;
-    Failure failure {};
-    for (long set = 0; set < sets; ++set) {
-        if (!runSet(dice, pool.data(), first, second, set, coverage, failure)) {
-            std::printf("superpos_fuzz: FAIL at set %ld (seed %llu): %s (%g)\n", failure.set,
-                        static_cast<unsigned long long>(seed), failure.what, failure.value);
-            return 1;
+    // Each source has its own random sequence, so that a change of one does
+    // not change the run of the other.
+    const auto runAll = [&](auto mode, uint64_t modeSeed) {
+        using Mode = decltype(mode);
+        Dice dice(modeSeed);
+        Coverage coverage;
+        Failure failure {};
+        for (long set = 0; set < sets; ++set) {
+            if (!runSet<Mode>(dice, pool.data(), first, second, set, coverage, failure)) {
+                std::printf("superpos_fuzz: FAIL (%s source) at set %ld (seed %llu): %s (%g)\n", Mode::name,
+                            failure.set, static_cast<unsigned long long>(seed), failure.what, failure.value);
+                return false;
+            }
         }
-    }
-    std::printf("superpos_fuzz: %ld grains; %ld sets with grains, %ld with a full pool\n", coverage.grains,
-                coverage.setsWithGrains, coverage.setsWithFullPool);
-    std::printf("superpos_fuzz: OK (%ld sets, seed %llu)\n", sets, static_cast<unsigned long long>(seed));
+        std::printf("superpos_fuzz: %s source: %ld grains; %ld sets with grains, %ld with a full pool\n", Mode::name,
+                    coverage.grains, coverage.setsWithGrains, coverage.setsWithFullPool);
+        return true;
+    };
+    if (!runAll(FileMode {}, seed) || !runAll(LiveMode {}, seed ^ 0x5eed5eed5eed5eedull))
+        return 1;
+    std::printf("superpos_fuzz: OK (%ld sets for each source, seed %llu)\n", sets,
+                static_cast<unsigned long long>(seed));
     return 0;
 }

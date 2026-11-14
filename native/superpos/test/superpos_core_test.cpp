@@ -34,12 +34,15 @@ superpos::Controls hardLeft(superpos::Controls c) {
 
 // Runs the core as the UGen does: one primed sample, then whole blocks.
 // Returns `total` samples of the left channel, from the first block on (the
-// primed sample is not in it); `rightOut` gets the right channel.
+// primed sample is not in it); `rightOut` gets the right channel. The read
+// pointer of the file source moves at `pointerRate`.
 std::vector<float> render(const superpos::BufferView& buf, const superpos::Controls& c, int total,
-                          int* maxActive = nullptr, std::vector<float>* rightOut = nullptr) {
+                          int* maxActive = nullptr, std::vector<float>* rightOut = nullptr,
+                          float pointerRate = 1.f) {
     std::vector<superpos::Grain> pool(kMaxGrains);
     superpos::Core core;
     core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+    core.source().setPointerRate(pointerRate);
     float primedLeft = 0.f, primedRight = 0.f;
     core.prime(buf, c, &primedLeft, &primedRight);
     int most = core.activeGrains();
@@ -66,7 +69,7 @@ std::vector<float> render(const superpos::BufferView& buf, const superpos::Contr
 
 void testNoBuffer() {
     const superpos::BufferView none { nullptr, 0, 1, kSampleRate };
-    const superpos::Controls c { 1.f, 0.01f, 4.f, 0.f };
+    const superpos::Controls c { 0.01f, 4.f, 0.f };
     int active = 0;
     const std::vector<float> out = render(none, c, 4800, &active);
     bool silent = true;
@@ -79,7 +82,7 @@ void testNoBuffer() {
 void testStereoBuffer() {
     std::vector<float> data(2 * 1000, 1.f);
     const superpos::BufferView stereo { data.data(), 1000, 2, kSampleRate };
-    const superpos::Controls c { 1.f, 0.01f, 4.f, 0.f };
+    const superpos::Controls c { 0.01f, 4.f, 0.f };
     int active = 0;
     const std::vector<float> out = render(stereo, c, 4800, &active);
     bool silent = true;
@@ -95,7 +98,7 @@ void testWindowShape() {
     std::vector<float> data(1000, 1.f);
     const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
     // 480 samples a grain, a grain each 960 samples: no overlap.
-    const superpos::Controls c = hardLeft({ 1.f, 0.01f, 0.5f, 0.f });
+    const superpos::Controls c = hardLeft({ 0.01f, 0.5f, 0.f });
     const std::vector<float> out = render(ones, c, 900);
     const int n = 480;
     double worst = 0.;
@@ -117,7 +120,7 @@ void testPoolLimit() {
     for (size_t i = 0; i < data.size(); ++i)
         data[i] = static_cast<float>(std::sin(i * 0.05));
     const superpos::BufferView buf { data.data(), static_cast<uint32_t>(data.size()), 1, kSampleRate };
-    const superpos::Controls c { 1.f, 0.2f, 200.f, 7.f };
+    const superpos::Controls c { 0.2f, 200.f, 7.f };
     int active = 0;
     const std::vector<float> out = render(buf, c, 96000, &active);
     bool finite = true;
@@ -168,7 +171,7 @@ double intervalVariation(const std::vector<long>& times) {
 bool within(double value, double expected, double part) { return std::fabs(value - expected) <= part * expected; }
 
 // overlap 5 and grainDur 0.05 s give 100 grains a second, 1000 in 10 s.
-const superpos::Controls kTiming { 1.f, 0.05f, 5.f, 0.f, 0.f, 1.f };
+const superpos::Controls kTiming { 0.05f, 5.f, 0.f, 0.f, 1.f };
 
 void testRegularTiming() {
     const std::vector<long> times = startTimes(kTiming, 10.);
@@ -233,15 +236,19 @@ void testRecovery() {
     std::vector<float> block(kBlock), blockRight(kBlock);
     const float inf = INFINITY;
     const superpos::Controls bad[] = {
-        { 1.f, 0.f, 5.f, 0.f },
-        { inf, 0.05f, 5.f, 0.f },
-        { NAN, NAN, NAN, NAN, NAN, NAN },
-        { 1.f, 0.05f, inf, inf },
+        { 0.f, 5.f, 0.f },
+        { 0.05f, 5.f, 0.f },
+        { NAN, NAN, NAN, NAN, NAN },
+        { 0.05f, inf, inf },
     };
+    const float badPointerRates[] = { 1.f, inf, NAN, 1.f };
     core.prime(ones, bad[0], block.data(), blockRight.data());
-    for (const superpos::Controls& c : bad)
+    for (int b = 0; b < 4; ++b) {
+        core.source().setPointerRate(badPointerRates[b]);
         for (int k = 0; k < 20; ++k)
-            core.process(ones, c, block.data(), blockRight.data(), kBlock);
+            core.process(ones, bad[b], block.data(), blockRight.data(), kBlock);
+    }
+    core.source().setPointerRate(1.f);
     const long before = core.startedGrains();
     float peak = 0.f;
     for (int k = 0; k < 200; ++k) {
@@ -271,7 +278,7 @@ void testTextureShapes() {
     const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
     const int n = 480;
     for (float texture : { 0.f, 0.25f, 0.5f, 0.75f, 1.f }) {
-        superpos::Controls c = hardLeft({ 1.f, 0.01f, 0.5f, 0.f });
+        superpos::Controls c = hardLeft({ 0.01f, 0.5f, 0.f });
         c.texture = texture;
         const std::vector<float> out = render(ones, c, 900);
         double worst = 0.;
@@ -287,7 +294,7 @@ void testTextureShapes() {
 void testTextureHeldPerGrain() {
     std::vector<float> data(1000, 1.f);
     const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
-    superpos::Controls steep = hardLeft({ 1.f, 0.01f, 0.5f, 0.f });
+    superpos::Controls steep = hardLeft({ 0.01f, 0.5f, 0.f });
     steep.texture = 0.f;
     superpos::Controls smooth = steep;
     smooth.texture = 1.f;
@@ -323,12 +330,13 @@ void testTextureHeldPerGrain() {
 
 // The random values of each grain that starts in `seconds`, on a buffer of
 // 2 s of ones.
-std::vector<superpos::GrainStart> grainStarts(const superpos::Controls& c, double seconds) {
+std::vector<superpos::GrainStart> grainStarts(const superpos::Controls& c, double seconds, float pointerRate) {
     static std::vector<float> data(96000, 1.f);
     const superpos::BufferView ones { data.data(), 96000, 1, kSampleRate };
     std::vector<superpos::Grain> pool(kMaxGrains);
     superpos::Core core;
     core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+    core.source().setPointerRate(pointerRate);
     core.seed(3, 5, 7);
     float left = 0.f, right = 0.f;
     std::vector<superpos::GrainStart> starts;
@@ -351,10 +359,10 @@ void testCentre() {
     for (size_t i = 0; i < data.size(); ++i)
         data[i] = static_cast<float>(std::sin(i * 0.05));
     const superpos::BufferView buf { data.data(), static_cast<uint32_t>(data.size()), 1, kSampleRate };
-    const superpos::Controls c { 0.5f, 0.05f, 4.f, 7.f };
+    const superpos::Controls c { 0.05f, 4.f, 7.f };
     std::vector<float> right;
-    const std::vector<float> left = render(buf, c, 48000, nullptr, &right);
-    const std::vector<float> mono = render(buf, hardLeft(c), 48000);
+    const std::vector<float> left = render(buf, c, 48000, nullptr, &right, 0.5f);
+    const std::vector<float> mono = render(buf, hardLeft(c), 48000, nullptr, nullptr, 0.5f);
     const double centre = std::cos(M_PI / 4.);
     double same = 0., fromMono = 0., peak = 0.;
     for (size_t i = 0; i < left.size(); ++i) {
@@ -371,7 +379,7 @@ void testCentre() {
 void testPanLaw() {
     std::vector<float> data(1000, 1.f);
     const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
-    superpos::Controls c { 1.f, 0.01f, 0.5f, 0.f };
+    superpos::Controls c { 0.01f, 0.5f, 0.f };
     c.pan = 0.5f;
     std::vector<float> right;
     const std::vector<float> left = render(ones, c, 480, nullptr, &right);
@@ -390,12 +398,12 @@ void testPanLaw() {
 // TRand(-detuneStep, detuneStep), TRand(0, scatter * SampleRate),
 // TRand(pan - spread, pan + spread).fold(-1, 1).
 void testRandomRanges() {
-    superpos::Controls c { 0.f, 0.05f, 5.f, 0.f };
+    superpos::Controls c { 0.05f, 5.f, 0.f };
     c.detuneStep = 0.5f;
     c.scatter = 0.1f;
     c.pan = 0.8f;
     c.stereoSpread = 0.5f;
-    const std::vector<superpos::GrainStart> starts = grainStarts(c, 10.);
+    const std::vector<superpos::GrainStart> starts = grainStarts(c, 10., 0.f);
     float detuneMin = 1e9f, detuneMax = -1e9f, panMin = 1e9f, panMax = -1e9f;
     double scatterMin = 1e9, scatterMax = -1e9;
     long panAbove = 0;
@@ -429,7 +437,7 @@ void testRandomRanges() {
     fixed.stereoSpread = 0.f;
     fixed.pan = -0.5f;
     bool allFixed = true;
-    for (const superpos::GrainStart& g : grainStarts(fixed, 1.))
+    for (const superpos::GrainStart& g : grainStarts(fixed, 1., 0.f))
         allFixed = allFixed && g.detune == 0.f && g.scatter == 0. && g.pan == -0.5f;
     check(allFixed, "controls at 0 give no random values");
 }
@@ -465,12 +473,12 @@ void testLevel() {
     std::vector<double> levels;
     double plainLow = 0., plainHigh = 0.;
     for (float overlap : { 1.f, 2.f, 5.f, 10.f, 20.f, 40.f, 60.f }) {
-        superpos::Controls c { 0.5f, 0.05f, overlap, 0.f };
+        superpos::Controls c { 0.05f, overlap, 0.f };
         c.scatter = 0.5f;
-        const double level = rmsDb(render(noise, c, 144000), 48000);
+        const double level = rmsDb(render(noise, c, 144000, nullptr, nullptr, 0.5f), 48000);
         superpos::Controls plain = c;
         plain.normalize = 0.f;
-        const double plainLevel = rmsDb(render(noise, plain, 144000), 48000);
+        const double plainLevel = rmsDb(render(noise, plain, 144000, nullptr, nullptr, 0.5f), 48000);
         std::printf("level: overlap %2.0f: %6.2f dB (without normalize %6.2f dB)\n", overlap, level, plainLevel);
         levels.push_back(level);
         if (overlap == 1.f)
@@ -494,7 +502,7 @@ void testLevel() {
 void testNormalizeOff() {
     std::vector<float> data(1000, 1.f);
     const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
-    superpos::Controls c = hardLeft({ 1.f, 0.05f, 30.f, 0.f });
+    superpos::Controls c = hardLeft({ 0.05f, 30.f, 0.f });
     c.normalize = 0.f;
     const std::vector<float> plain = render(ones, c, 4800);
     c.normalize = 1.f;

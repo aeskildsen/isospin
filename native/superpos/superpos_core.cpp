@@ -205,7 +205,85 @@ uint32_t Random::next() {
     return s1 ^ s2 ^ s3;
 }
 
-void Core::init(Grain* pool, int maxGrains, double sampleRate, int blockSize) {
+bool usableBuffer(const BufferView& buf) { return buf.data && buf.channels == 1 && buf.frames > 0; }
+
+void FileSource::begin(const BufferView& buf, double sampleDur, int) {
+    mFrames = static_cast<float>(buf.frames);
+    const float rateScale = static_cast<float>(buf.sampleRate * sampleDur);
+    double rate = static_cast<float>(mPointerRate * rateScale);
+    // An infinite or NaN rate stops the pointer, as it would make the pointer
+    // NaN for good.
+    if (!std::isfinite(rate))
+        rate = 0.;
+    mRate = rate;
+    mWork = mPointer;
+}
+
+double FileSource::wrapPointer(double pointer) const { return wrap(pointer, 0., static_cast<double>(mFrames)); }
+
+double FileSource::place(const BufferView& buf, bool scattered, double scatterFrames, double, double) const {
+    float pos = mPos;
+    // As `(Phasor + TRand.ar(0, scatter * SampleRate.ir)) / frames` and
+    // `.wrap(0, 1)` in the SynthDef that the controls come from.
+    if (scattered)
+        pos = static_cast<float>(wrap((mGrainPointer + scatterFrames) / buf.frames, 0., 1.));
+    // The product is in float, as GrainBuf computes it.
+    return pos * buf.frames;
+}
+
+void LiveSource::setInput(const float* in, int inStep, float* data, float freeze, float position) {
+    mIn = in;
+    mInStep = inStep;
+    mData = data;
+    // NaN does not freeze.
+    mFrozen = freeze >= 0.5f;
+    mPosition = unitRange(position);
+}
+
+void LiveSource::begin(const BufferView& buf, double, int n) {
+    mTick = -1;
+    const uint32_t frames = usableBuffer(buf) ? buf.frames : 0;
+    if (frames == 0) {
+        mHeadStart = mHeadEnd = 0;
+        return;
+    }
+    // The buffer can be smaller than before.
+    mHeadStart = mHead % frames;
+    mHeadEnd = mHeadStart;
+    if (mFrozen || !mData || !mIn)
+        return;
+    // The whole block is written before the grains play. A grain that starts
+    // at sample i reads only frames that were written before sample i (see
+    // place()), so the frames that come later in this block do not matter.
+    uint32_t h = mHeadStart;
+    for (int i = 0; i < n; ++i) {
+        mData[h] = mIn[i * mInStep];
+        if (++h == frames)
+            h = 0;
+    }
+    mHeadEnd = h;
+}
+
+double LiveSource::place(const BufferView& buf, bool scattered, double scatterFrames, double rate,
+                         double length) const {
+    const double frames = buf.frames;
+    const double headSpeed = mFrozen ? 0.0 : 1.0;
+    // The head at this sample. Frame head - 1 is the newest input.
+    const double head = mHeadStart + (mFrozen ? 0 : std::max(0, mTick));
+    // The change of the distance over the whole grain.
+    const double drift = (headSpeed - rate) * length;
+    const double lo = kMinDistance - std::min(0.0, drift);
+    const double hi = frames - kMinDistance - mBlockSize - std::max(0.0, drift);
+    if (!(lo <= hi))
+        return std::nan("");
+    double distance = mPosition * frames;
+    if (scattered)
+        distance += scatterFrames;
+    distance = std::min(std::max(distance, lo), hi);
+    return wrap(head - distance, 0., frames);
+}
+
+template <class Source> void Engine<Source>::init(Grain* pool, int maxGrains, double sampleRate, int blockSize) {
     mPool = pool;
     mMaxGrains = std::max(0, maxGrains);
     mNumActive = 0;
@@ -217,14 +295,14 @@ void Core::init(Grain* pool, int maxGrains, double sampleRate, int blockSize) {
     mTrigIncSet = false;
     mPrevTrig = 0.f;
     mTrigScale = 1.0;
-    mPointer = 0.0;
+    mSource.reset(std::max(1, blockSize));
     mStarted = 0;
     mGrainCount = 0.0;
     mGain = 1.0;
     mGainCoef = 1.0 - std::exp(-mSampleDur / kGainSeconds);
 }
 
-void Core::applyLevel(float* left, float* right, int n, bool keepState) {
+template <class Source> void Engine<Source>::applyLevel(float* left, float* right, int n, bool keepState) {
     // The count of this block, smoothed with the coefficient for the length
     // of the block.
     const double target = mNumActive;
@@ -243,7 +321,7 @@ void Core::applyLevel(float* left, float* right, int n, bool keepState) {
     }
 }
 
-double Core::nextIntervalScale(float regularity) {
+template <class Source> double Engine<Source>::nextIntervalScale(float regularity) {
     if (regularity <= 0.f)
         return 1.0;
     // An exponential value with a mean of 1. 1 - u is in (0, 1], so the
@@ -253,17 +331,20 @@ double Core::nextIntervalScale(float regularity) {
     return 1.0 / std::max(kMinIntervalScale, (1.0 - r) + r * e);
 }
 
-bool Core::usable(const BufferView& buf) { return buf.data && buf.channels == 1 && buf.frames > 0; }
-
-void Core::prime(const BufferView& buf, const Controls& c, float* left, float* right) {
+template <class Source>
+void Engine<Source>::prime(const BufferView& buf, const Controls& c, float* left, float* right) {
     advance(buf, c, left, right, 1, false);
 }
 
-void Core::process(const BufferView& buf, const Controls& c, float* left, float* right, int n) {
+template <class Source>
+void Engine<Source>::process(const BufferView& buf, const Controls& c, float* left, float* right, int n) {
     advance(buf, c, left, right, n, true);
 }
 
-void Core::advance(const BufferView& buf, const Controls& c, float* left, float* right, int n, bool keepState) {
+template <class Source>
+void Engine<Source>::advance(const BufferView& buf, const Controls& c, float* left, float* right, int n,
+                             bool keepState) {
+    mSource.begin(buf, mSampleDur, n);
     std::fill(left, left + n, 0.f);
     std::fill(right, right + n, 0.f);
     playActive(buf, left, right, n);
@@ -293,17 +374,6 @@ void Core::advance(const BufferView& buf, const Controls& c, float* left, float*
     const Random randomBefore = mRandom;
     const double scaleBefore = mTrigScale;
 
-    // The read pointer moves in frames from 0 to the end of the buffer. The
-    // grain position is the pointer as a part of the buffer length.
-    const float frames = static_cast<float>(buf.frames);
-    const float rateScale = static_cast<float>(buf.sampleRate * mSampleDur);
-    double pointerRate = static_cast<float>(c.pointerRate * rateScale);
-    // An infinite or NaN rate stops the pointer, as it would make the pointer
-    // NaN for good.
-    if (!std::isfinite(pointerRate))
-        pointerRate = 0.;
-    double pointer = mPointer;
-
     for (int i = 0; i < n; ++i) {
         float trig = wrapTrigger(prevInc, trigPhase);
         if (trig > 0.f) {
@@ -314,13 +384,9 @@ void Core::advance(const BufferView& buf, const Controls& c, float* left, float*
         prevInc += incSlope;
         trigPhase += prevInc * mTrigScale;
 
-        pointer = wrap(pointer, 0., static_cast<double>(frames));
-        const float pos = static_cast<float>(pointer) / frames;
-        const double grainPointer = pointer;
-        pointer += pointerRate;
-
+        mSource.tick();
         if (trig > 0.f && mPrevTrig <= 0.f)
-            startGrain(buf, c, pos, grainPointer, left, right, i, n);
+            startGrain(buf, c, left, right, i, n);
         mPrevTrig = trig;
     }
 
@@ -328,20 +394,20 @@ void Core::advance(const BufferView& buf, const Controls& c, float* left, float*
         applyLevel(left, right, n, keepState);
 
     mTrigInc = inc;
+    mSource.end(keepState);
     if (keepState) {
         mTrigPhase = trigPhase;
-        mPointer = pointer;
     } else {
         mRandom = randomBefore;
         mTrigScale = scaleBefore;
     }
 }
 
-void Core::playActive(const BufferView& buf, float* left, float* right, int n) {
+template <class Source> void Engine<Source>::playActive(const BufferView& buf, float* left, float* right, int n) {
     // A grain that has finished leaves the pool at the start of the next
     // block, and the last grain takes its place, as in GrainBuf. The order of
     // the grains sets the order of the sums.
-    const bool canRead = usable(buf);
+    const bool canRead = usableBuffer(buf);
     for (int i = 0; i < mNumActive;) {
         Grain& g = mPool[i];
         if (!canRead)
@@ -356,9 +422,10 @@ void Core::playActive(const BufferView& buf, float* left, float* right, int n) {
     }
 }
 
-void Core::startGrain(const BufferView& buf, const Controls& c, float pos, double pointer, float* left, float* right,
-                      int offset, int n) {
-    if (mNumActive >= mMaxGrains || !usable(buf))
+template <class Source>
+void Engine<Source>::startGrain(const BufferView& buf, const Controls& c, float* left, float* right, int offset,
+                                int n) {
+    if (mNumActive >= mMaxGrains || !usableBuffer(buf))
         return;
 
     // The random values of the grain, in the order detune, scatter, pan. A
@@ -369,12 +436,9 @@ void Core::startGrain(const BufferView& buf, const Controls& c, float pos, doubl
     if (detuneStep > 0.f)
         start.detune = static_cast<float>(mRandom.uniform() * 2. - 1.) * detuneStep;
     const float scatter = finiteOrZero(c.scatter);
-    if (scatter != 0.f) {
-        // As `(Phasor + TRand.ar(0, scatter * SampleRate.ir)) / frames` and
-        // `.wrap(0, 1)` in the SynthDef that the controls come from.
+    // TRand.ar(0, scatter * SampleRate.ir): frames at the server rate.
+    if (scatter != 0.f)
         start.scatter = mRandom.uniform() * scatter * mSampleRate;
-        pos = static_cast<float>(wrap((pointer + start.scatter) / buf.frames, 0., 1.));
-    }
     const float spread = unitRange(c.stereoSpread);
     float pan = finiteOrZero(c.pan);
     if (spread > 0.f)
@@ -386,12 +450,12 @@ void Core::startGrain(const BufferView& buf, const Controls& c, float pos, doubl
     if (start.detune != 0.f)
         ratio *= midiRatio(start.detune);
     const double rate = ratio * bufRateScale;
-    const double phase = pos * buf.frames;
-    if (!std::isfinite(phase) || !std::isfinite(rate))
-        return;
     double counter = c.grainDur * mSampleRate;
     counter = std::max(4., counter);
     counter = std::min(kMaxGrainSamples, counter);
+    const double phase = mSource.place(buf, scatter != 0.f, start.scatter, rate, counter);
+    if (!std::isfinite(phase) || !std::isfinite(rate))
+        return;
 
     Grain& g = mPool[mNumActive++];
     ++mStarted;
@@ -416,5 +480,9 @@ void Core::startGrain(const BufferView& buf, const Controls& c, float pos, doubl
     if (g.counter <= 0)
         --mNumActive;
 }
+
+// The sources that the UGens use.
+template class Engine<FileSource>;
+template class Engine<LiveSource>;
 
 } // namespace superpos
