@@ -12,6 +12,8 @@ namespace {
 // constexpr: SuperSonic's web build does not run the dynamic initialisation
 // of namespace-scope variables, so std::acos(-1.) here would stay 0.
 constexpr double kPi = 3.141592653589793238462643383279502884;
+// pi / 2 in float, as pi2_f of SuperCollider: float(pi) * 0.5f.
+constexpr float kHalfPiF = static_cast<float>(kPi) * 0.5f;
 
 // Wraps `in` into [lo, hi), as sc_wrap of SuperCollider (double version).
 double wrap(double in, double lo, double hi) {
@@ -91,6 +93,14 @@ float unitRange(float x, float otherwise = 0.f) {
 // The longest grain in samples. It keeps the sample counter in an int.
 constexpr double kMaxGrainSamples = 1 << 30;
 
+// The time constants of the level control, from the granular player of
+// Clouds: there the grain count moves by 0.9 (rise) or 0.2 (fall) of the
+// difference in each block of 1 ms, and the gain by 0.01 in each sample at
+// 32 kHz.
+constexpr double kCountRiseSeconds = 0.000434; // -1 ms / ln(0.1)
+constexpr double kCountFallSeconds = 0.00448; // -1 ms / ln(0.8)
+constexpr double kGainSeconds = 0.00311; // -1 / (32000 * ln(0.99))
+
 // The shortest interval, as a part of the regular interval. It keeps the
 // phase increment finite.
 constexpr double kMinIntervalScale = 1e-4;
@@ -117,8 +127,28 @@ float windowGain(const Grain& g, float hann, double tri) {
     return x + g.smooth * (hann - x);
 }
 
-// Plays `count` samples of one grain into `out`, with linear interpolation.
-void playGrain(Grain& g, const BufferView& buf, float* out, int count) {
+// Folds `in` into [lo, hi] (reflects it at the limits), as sc_fold. NaN and
+// infinity give lo + (hi - lo) / 2.
+float fold(float in, float lo, float hi) {
+    if (!std::isfinite(in))
+        return lo + (hi - lo) * 0.5f;
+    if (in >= lo && in <= hi)
+        return in;
+    const double range = static_cast<double>(hi) - lo;
+    const double range2 = range + range;
+    const double x = static_cast<double>(in) - lo;
+    double c = x - range2 * std::floor(x / range2);
+    if (c >= range)
+        c = range2 - c;
+    return static_cast<float>(c + lo);
+}
+
+// A finite control, or 0.
+float finiteOrZero(float x) { return std::isfinite(x) ? x : 0.f; }
+
+// Plays `count` samples of one grain into `left` and `right`, with linear
+// interpolation.
+void playGrain(Grain& g, const BufferView& buf, float* left, float* right, int count) {
     const double loopMax = static_cast<double>(buf.frames);
     const int guardFrame = static_cast<int>(buf.frames) - 2;
     const uint32_t bufSamples = buf.frames * buf.channels;
@@ -140,7 +170,9 @@ void playGrain(Grain& g, const BufferView& buf, float* out, int count) {
         const float b = table1[0];
         const float c = table2[0];
         const float gain = hannOnly ? amp : windowGain(g, amp, tri);
-        out[j] += gain * (b + frac * (c - b));
+        const float value = gain * (b + frac * (c - b));
+        left[j] += value * g.pan1;
+        right[j] += value * g.pan2;
         tri += g.triInc;
 
         const double y0 = b1 * y1 - y2;
@@ -187,6 +219,28 @@ void Core::init(Grain* pool, int maxGrains, double sampleRate, int blockSize) {
     mTrigScale = 1.0;
     mPointer = 0.0;
     mStarted = 0;
+    mGrainCount = 0.0;
+    mGain = 1.0;
+    mGainCoef = 1.0 - std::exp(-mSampleDur / kGainSeconds);
+}
+
+void Core::applyLevel(float* left, float* right, int n, bool keepState) {
+    // The count of this block, smoothed with the coefficient for the length
+    // of the block.
+    const double target = mNumActive;
+    const double seconds = target > mGrainCount ? kCountRiseSeconds : kCountFallSeconds;
+    const double count = mGrainCount + (1.0 - std::exp(-n * mSampleDur / seconds)) * (target - mGrainCount);
+    const double gainTarget = 1.0 / std::sqrt(std::max(1.0, count));
+    double gain = mGain;
+    for (int i = 0; i < n; ++i) {
+        gain += mGainCoef * (gainTarget - gain);
+        left[i] = static_cast<float>(left[i] * gain);
+        right[i] = static_cast<float>(right[i] * gain);
+    }
+    if (keepState) {
+        mGrainCount = count;
+        mGain = gain;
+    }
 }
 
 double Core::nextIntervalScale(float regularity) {
@@ -201,13 +255,18 @@ double Core::nextIntervalScale(float regularity) {
 
 bool Core::usable(const BufferView& buf) { return buf.data && buf.channels == 1 && buf.frames > 0; }
 
-void Core::prime(const BufferView& buf, const Controls& c, float* out) { advance(buf, c, out, 1, false); }
+void Core::prime(const BufferView& buf, const Controls& c, float* left, float* right) {
+    advance(buf, c, left, right, 1, false);
+}
 
-void Core::process(const BufferView& buf, const Controls& c, float* out, int n) { advance(buf, c, out, n, true); }
+void Core::process(const BufferView& buf, const Controls& c, float* left, float* right, int n) {
+    advance(buf, c, left, right, n, true);
+}
 
-void Core::advance(const BufferView& buf, const Controls& c, float* out, int n, bool keepState) {
-    std::fill(out, out + n, 0.f);
-    playActive(buf, out, n);
+void Core::advance(const BufferView& buf, const Controls& c, float* left, float* right, int n, bool keepState) {
+    std::fill(left, left + n, 0.f);
+    std::fill(right, right + n, 0.f);
+    playActive(buf, left, right, n);
 
     // The trigger frequency and its phase increment, in the float and double
     // steps of the SynthDef. The increment moves linearly over the block to a
@@ -257,12 +316,16 @@ void Core::advance(const BufferView& buf, const Controls& c, float* out, int n, 
 
         pointer = wrap(pointer, 0., static_cast<double>(frames));
         const float pos = static_cast<float>(pointer) / frames;
+        const double grainPointer = pointer;
         pointer += pointerRate;
 
         if (trig > 0.f && mPrevTrig <= 0.f)
-            startGrain(buf, c, pos, out, i, n);
+            startGrain(buf, c, pos, grainPointer, left, right, i, n);
         mPrevTrig = trig;
     }
+
+    if (!(c.normalize < 0.5f))
+        applyLevel(left, right, n, keepState);
 
     mTrigInc = inc;
     if (keepState) {
@@ -274,7 +337,7 @@ void Core::advance(const BufferView& buf, const Controls& c, float* out, int n, 
     }
 }
 
-void Core::playActive(const BufferView& buf, float* out, int n) {
+void Core::playActive(const BufferView& buf, float* left, float* right, int n) {
     // A grain that has finished leaves the pool at the start of the next
     // block, and the last grain takes its place, as in GrainBuf. The order of
     // the grains sets the order of the sums.
@@ -288,17 +351,41 @@ void Core::playActive(const BufferView& buf, float* out, int n) {
             continue;
         }
         if (canRead)
-            playGrain(g, buf, out, std::min(g.counter, n));
+            playGrain(g, buf, left, right, std::min(g.counter, n));
         ++i;
     }
 }
 
-void Core::startGrain(const BufferView& buf, const Controls& c, float pos, float* out, int offset, int n) {
+void Core::startGrain(const BufferView& buf, const Controls& c, float pos, double pointer, float* left, float* right,
+                      int offset, int n) {
     if (mNumActive >= mMaxGrains || !usable(buf))
         return;
 
+    // The random values of the grain, in the order detune, scatter, pan. A
+    // control at 0 takes no random value, so that the output with all of
+    // them at 0 is the same as without them.
+    GrainStart start {};
+    const float detuneStep = std::fabs(finiteOrZero(c.detuneStep));
+    if (detuneStep > 0.f)
+        start.detune = static_cast<float>(mRandom.uniform() * 2. - 1.) * detuneStep;
+    const float scatter = finiteOrZero(c.scatter);
+    if (scatter != 0.f) {
+        // As `(Phasor + TRand.ar(0, scatter * SampleRate.ir)) / frames` and
+        // `.wrap(0, 1)` in the SynthDef that the controls come from.
+        start.scatter = mRandom.uniform() * scatter * mSampleRate;
+        pos = static_cast<float>(wrap((pointer + start.scatter) / buf.frames, 0., 1.));
+    }
+    const float spread = unitRange(c.stereoSpread);
+    float pan = finiteOrZero(c.pan);
+    if (spread > 0.f)
+        pan = static_cast<float>(pan - spread + mRandom.uniform() * 2. * spread);
+    start.pan = fold(pan, -1.f, 1.f);
+
     const float bufRateScale = static_cast<float>(static_cast<float>(buf.sampleRate) * mSampleDur);
-    const double rate = midiRatio(c.transpose) * bufRateScale;
+    float ratio = midiRatio(c.transpose);
+    if (start.detune != 0.f)
+        ratio *= midiRatio(start.detune);
+    const double rate = ratio * bufRateScale;
     const double phase = pos * buf.frames;
     if (!std::isfinite(phase) || !std::isfinite(rate))
         return;
@@ -308,6 +395,11 @@ void Core::startGrain(const BufferView& buf, const Controls& c, float pos, float
 
     Grain& g = mPool[mNumActive++];
     ++mStarted;
+    mLastStart = start;
+    // Equal-power pan over two channels, as GrainBuf with two channels.
+    const float panAngle = std::min(std::max(start.pan * 0.5f + 0.5f, 0.f), 1.f) * kHalfPiF;
+    g.pan1 = std::cos(panAngle);
+    g.pan2 = std::sin(panAngle);
     g.rate = rate;
     g.phase = phase;
     g.counter = static_cast<int>(counter);
@@ -319,7 +411,7 @@ void Core::startGrain(const BufferView& buf, const Controls& c, float pos, float
     g.amp = static_cast<float>(g.y1 * g.y1);
     setWindow(g, unitRange(c.texture, 1.f), counter);
 
-    playGrain(g, buf, out + offset, std::min(g.counter, n - offset));
+    playGrain(g, buf, left + offset, right + offset, std::min(g.counter, n - offset));
     // A grain that ends in its first block leaves the pool at once.
     if (g.counter <= 0)
         --mNumActive;

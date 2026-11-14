@@ -100,6 +100,10 @@ superpos::Controls randomControls(Dice& dice) {
     c.regularity = control(dice, 0., 1.);
     c.probability = control(dice, 0., 1.);
     c.texture = control(dice, 0., 1.);
+    c.detuneStep = control(dice, 0., 12.);
+    c.scatter = control(dice, 0., 1.);
+    c.pan = control(dice, -1., 1.);
+    c.stereoSpread = control(dice, 0., 1.);
     return c;
 }
 
@@ -192,24 +196,26 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
     randomBuffer(dice, first);
     randomBuffer(dice, second);
 
-    float out[kBlock];
+    float left[kBlock], right[kBlock];
     const auto checkBlock = [&](int n, float peak) {
         const float limit = kMaxGrains * peak * 1.0001f;
-        for (int i = 0; i < n; ++i) {
-            if (!std::isfinite(out[i])) {
-                failure = { set, "output is not finite", out[i] };
-                return false;
-            }
-            if (std::fabs(out[i]) > limit) {
-                failure = { set, "output is larger than the pool size times the buffer peak", out[i] };
-                return false;
+        for (const float* out : { left, right }) {
+            for (int i = 0; i < n; ++i) {
+                if (!std::isfinite(out[i])) {
+                    failure = { set, "output is not finite", out[i] };
+                    return false;
+                }
+                if (std::fabs(out[i]) > limit) {
+                    failure = { set, "output is larger than the pool size times the buffer peak", out[i] };
+                    return false;
+                }
             }
         }
         return true;
     };
 
     superpos::Controls c = randomControls(dice);
-    core.prime(first.view, c, out);
+    core.prime(first.view, c, left, right);
     if (!checkBlock(1, first.peak))
         return false;
     bool fullPool = core.activeGrains() == kMaxGrains;
@@ -222,7 +228,7 @@ bool runSet(Dice& dice, superpos::Grain* pool, TestBuffer& first, TestBuffer& se
         if (dice.below(3) == 0)
             c = randomControls(dice);
         const int n = 1 + dice.below(kBlock);
-        core.process(b.view, c, out, n);
+        core.process(b.view, c, left, right, n);
         if (!checkBlock(n, peak))
             return false;
         if (core.activeGrains() < 0 || core.activeGrains() > kMaxGrains) {

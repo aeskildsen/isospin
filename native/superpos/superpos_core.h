@@ -4,17 +4,19 @@
 // The DSP core of the SuperPos granular UGen. It uses no SuperCollider
 // headers, so that a test program can use it without a server.
 //
-// SuperPos plays overlapping grains from a mono buffer. A read pointer moves
-// through the buffer; each grain starts at the pointer and plays the buffer
-// with a window that the texture control shapes.
+// SuperPos plays overlapping grains from a mono buffer into two channels. A
+// read pointer moves through the buffer; each grain starts at the pointer and
+// plays the buffer with a window that the texture control shapes.
 //
-// With regularity 0 and probability 1 (the defaults), the output is the same
-// as that of this SynthDef graph, sample for sample within float rounding:
+// With normalize 0 and the other controls at their defaults (regularity 0,
+// probability 1, texture 1, and detuneStep, scatter, pan and stereoSpread 0),
+// the output is the same as that of this SynthDef graph, sample for sample
+// within float rounding:
 //
 //     trig = Impulse.ar(overlap * grainDur.reciprocal);
 //     pos  = Phasor.ar(0, pointerRate * BufRateScale.kr(buf), 0, BufFrames.kr(buf))
 //            / BufFrames.kr(buf);
-//     GrainBuf.ar(1, trig, grainDur, buf, transpose.midiratio, pos, 2, 0, -1, maxGrains + 1)
+//     GrainBuf.ar(2, trig, grainDur, buf, transpose.midiratio, pos, 2, 0, -1, maxGrains + 1)
 //
 // To make this true, the core keeps the order of operations and the float and
 // double types of these UGens in SuperCollider 3.14.1, and also their
@@ -35,7 +37,20 @@
 // From 0.5 to 1 it goes from the triangle to the Hann window,
 // (1 - cos(pi x)) / 2. At 1 (the default) the window is the Hann window of
 // GrainBuf.
-#pragma once
+//
+// Each grain also gets random values when it starts, with the ranges of the
+// TRand UGens in the SynthDef \cloud that SuperPos comes from: a detune in
+// +-detuneStep semitones; a start up to `scatter` seconds after the pointer;
+// a pan position in pan +- stereoSpread, folded into [-1, 1]. The pan is
+// equal-power, as GrainBuf with two channels.
+//
+// With normalize on (the default), the output is multiplied by
+// 1 / sqrt(n), where n is the number of active grains, smoothed as in the
+// granular player of Clouds: the count follows a rise in 0.43 ms and a fall
+// in 4.5 ms, and the gain follows its target in 3.1 ms. For grains that are
+// not correlated (a noise buffer, or a pointer that does not move with the
+// grains) the level then stays the same at all overlaps. With normalize off
+// the output is the plain sum of the grains.
 
 #include <cstdint>
 
@@ -52,6 +67,14 @@ struct Grain {
     double tri, triInc; // 2 * (k + 1) / length at sample k: the triangle phase
     float slope; // > 0: a trapezoid, min(1, triangle * slope)
     float smooth; // with slope 0: triangle + smooth * (Hann - triangle)
+    float pan1, pan2; // the gains of the left and the right channel
+};
+
+// The random values of the last grain that started, for tests.
+struct GrainStart {
+    float detune; // semitones
+    double scatter; // frames added to the read pointer
+    float pan; // -1 to 1, after the fold
 };
 
 // A view of the buffer that the grains read. `data` is null when there is no
@@ -72,6 +95,11 @@ struct Controls {
     float regularity = 0.f; // 0 = a fixed interval, 1 = random intervals; clipped to [0, 1]
     float probability = 1.f; // the chance that a trigger starts a grain; clipped to [0, 1]
     float texture = 1.f; // the window shape (see below); clipped to [0, 1]
+    float detuneStep = 0.f; // each grain is detuned by a random value in +-detuneStep semitones
+    float scatter = 0.f; // each grain starts a random time in [0, scatter) seconds after the pointer
+    float pan = 0.f; // -1 = left, 1 = right
+    float stereoSpread = 0.f; // each grain pans to a random value in pan +- stereoSpread; clipped to [0, 1]
+    float normalize = 1.f; // >= 0.5 (or NaN): scale the output by 1 / sqrt(active grains); < 0.5: no scaling
 };
 
 // A random generator with its own state (Tausworthe, three components, as
@@ -104,21 +132,27 @@ public:
     // initial state. Impulse, Phasor and GrainBuf do the same when they are
     // constructed. The trigger of the first block does not start a second
     // grain, because the trigger was already high in this sample.
-    void prime(const BufferView& buf, const Controls& c, float* out);
+    void prime(const BufferView& buf, const Controls& c, float* left, float* right);
 
-    // Writes `n` samples to `out` (the core writes; it does not add).
-    void process(const BufferView& buf, const Controls& c, float* out, int n);
+    // Writes `n` samples to `left` and `right` (the core writes; it does not
+    // add).
+    void process(const BufferView& buf, const Controls& c, float* left, float* right, int n);
 
     int activeGrains() const { return mNumActive; }
 
     // The number of grains that started since init(), for tests.
     long startedGrains() const { return mStarted; }
 
+    // The random values of the last grain that started, for tests.
+    const GrainStart& lastStart() const { return mLastStart; }
+
 private:
-    void playActive(const BufferView& buf, float* out, int n);
-    void startGrain(const BufferView& buf, const Controls& c, float pos, float* out, int offset, int n);
+    void playActive(const BufferView& buf, float* left, float* right, int n);
+    void startGrain(const BufferView& buf, const Controls& c, float pos, double pointer, float* left, float* right,
+                    int offset, int n);
     double nextIntervalScale(float regularity);
-    void advance(const BufferView& buf, const Controls& c, float* out, int n, bool keepState);
+    void advance(const BufferView& buf, const Controls& c, float* left, float* right, int n, bool keepState);
+    void applyLevel(float* left, float* right, int n, bool keepState);
     static bool usable(const BufferView& buf);
 
     Grain* mPool = nullptr;
@@ -142,6 +176,13 @@ private:
 
     Random mRandom;
     long mStarted = 0;
+    GrainStart mLastStart {};
+
+    // The level control: the smoothed grain count, the gain, and the
+    // smoothing coefficient of the gain for one sample.
+    double mGrainCount = 0.0;
+    double mGain = 1.0;
+    double mGainCoef = 0.0;
 };
 
 } // namespace superpos
