@@ -13,6 +13,8 @@ Makes a development build with build-sc-static.py and then:
      defines of SuperSonic's engine (CLOCKWORK_GUEST and others), and links
      them into a shared library in the same way. Only for this link, a test
      file defines SuperSonic's constant interface table.
+     Hand-written sources must need no dynamic initialisation here (see
+     check_static_init).
   3. Builds each test program of the hand-written UGens ([[native]] `tests`)
      with its DSP core (`core`), with AddressSanitizer and
      UndefinedBehaviorSanitizer, and runs it. Exit code 0 is a pass.
@@ -115,11 +117,30 @@ def run(args: list[str], **kwargs) -> None:
 class Variant:
     """One way to compile the UGen sources: a header set and its defines."""
 
-    def __init__(self, name: str, system_includes: list[Path], defines: list[str], load: str):
+    def __init__(self, name: str, system_includes: list[Path], defines: list[str], load: str,
+                 check_init: bool):
         self.name = name
         self.system_includes = system_includes
         self.defines = defines
         self.load = load
+        # Check the hand-written sources for dynamic initialisation. Only for
+        # SuperSonic's headers: the stock headers have dynamic constants of
+        # their own (for example pi), which SuperSonic makes constexpr.
+        self.check_init = check_init
+
+
+def check_static_init(objects: list[Path]) -> None:
+    """Stops when a hand-written source needs dynamic initialisation. GCC
+    gives such a file a _GLOBAL__sub_I_ function, which the .init_array
+    section calls; SuperSonic's web build does not call it. The objects must
+    be compiled with -O0 -fno-builtin: with optimisation, GCC computes some
+    values at compile time (std::acos(-1.)) that Emscripten does not."""
+    for obj in objects:
+        symbols = subprocess.run(["nm", str(obj)], check=True, capture_output=True, text=True).stdout
+        if "_GLOBAL__sub_I_" in symbols:
+            sys.exit(f"check-native: FAIL: {obj.name} needs dynamic initialisation of a "
+                     "namespace-scope or static variable; SuperSonic's web build does not run it "
+                     "(use constexpr values)")
 
 
 def compile_variant(cxx: list[str], variant: Variant, out: Path, work: Path,
@@ -131,6 +152,7 @@ def compile_variant(cxx: list[str], variant: Variant, out: Path, work: Path,
     base += [f"-isystem{p}" for p in variant.system_includes]
     base += [f"-D{d}" for d in variant.defines]
     objects = []
+    native_objects = []
 
     for u in ugens:
         obj = obj_dir / f"{u['class']}.o"
@@ -148,12 +170,22 @@ def compile_variant(cxx: list[str], variant: Variant, out: Path, work: Path,
                 + [f"-I{out / 'include'}", f"-I{out / 'src' / n['name']}",
                    str(out / "src" / n["name"] / rel), "-o", str(obj)])
             objects.append(obj)
+            if not variant.check_init:
+                continue
+            # A second object without optimisation, for check_static_init.
+            plain = obj.with_suffix(".O0.o")
+            run([a for a in base if a != "-O2"] + ["-O0", "-fno-builtin"]
+                + [f"-I{out / 'include'}", f"-I{out / 'src' / n['name']}",
+                   str(out / "src" / n["name"] / rel), "-o", str(plain)])
+            native_objects.append(plain)
 
     load_src = obj_dir / "isospin_load.cpp"
     load_src.write_text(variant.load)
     load_obj = obj_dir / "isospin_load.o"
     run(base + PLUGIN_WARNINGS + [f"-I{out}", str(load_src), "-o", str(load_obj)])
     objects.append(load_obj)
+
+    check_static_init(native_objects)
 
     library = obj_dir / "isospin.so"
     run(cxx + ["-shared", "-Wl,--no-undefined", "-o", str(library)]
@@ -209,9 +241,10 @@ def main() -> None:
         run([sys.executable, "-I", str(ROOT / "scripts" / "build-sc-static.py"),
              "--out", str(out), "--manifest", str(manifest)])
 
-        stock = Variant("stock", [sc_include / s for s in STOCK_INCLUDES], [], STOCK_LOAD)
+        stock = Variant("stock", [sc_include / s for s in STOCK_INCLUDES], [], STOCK_LOAD,
+                        check_init=False)
         guest = Variant("supersonic", [scsynth / s for s in GUEST_INCLUDES],
-                        GUEST_DEFINES, GUEST_LOAD)
+                        GUEST_DEFINES, GUEST_LOAD, check_init=True)
         for variant in (stock, guest):
             compile_variant(cxx, variant, out, work, ugens, natives)
 

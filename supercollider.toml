@@ -29,3 +29,12 @@
 dsp = "woodbar.dsp"
 class = "Woodbar"
 prefix = "Phys"
+
+[[native]]
+name = "SuperPos"
+dir = "native/superpos"
+core = ["superpos_core.cpp"]
+plugin = ["SuperPos.cpp"]
+classes = ["SuperPos.sc"]
+load = "SuperPos_Load"
+tests = ["test/superpos_core_test.cpp"]

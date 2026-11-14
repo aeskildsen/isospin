@@ -10,6 +10,7 @@ This repository holds the DSP sources and the scripts that make host code from t
 |---|---|
 | `woodbar.dsp` | A struck wooden bar: claves, wood stick, xylophone or marimba bar. Modal bar with the wood damping law and a Hertz-timed mallet. |
 | `wood.lib` | Shared parts for the wooden instruments: damping law, mallet strike, noise modes. |
+| `native/superpos/` | SuperPos, a granular UGen in hand-written C++: overlapping grains from a mono buffer, started at a moving read pointer. Its output is the same as a graph of SuperCollider's `Impulse`, `Phasor` and `GrainBuf` (see `superpos_core.h`). Work in progress. |
 
 ## Try it
 
