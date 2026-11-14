@@ -21,6 +21,12 @@
 // Do not keep inTable or the World in a static variable: the code must have no
 // global state that changes, because more than one World can load it.
 //
+// Do not give a namespace-scope or static variable a value that needs code at
+// run time (for example `const double pi = std::acos(-1.)`): SuperSonic's web
+// build does not run dynamic initialisation, and the variable stays 0. Use
+// constexpr values. scripts/check-native.py stops when a hand-written source
+// needs dynamic initialisation.
+//
 // The load function has C++ linkage and the name that supercollider.toml gives
 // in `load`. Do not use PluginLoad(): with stock headers and no STATIC_PLUGINS
 // it makes the entry point of a loadable plugin, not <Name>_Load.
