@@ -1,0 +1,19 @@
+# The UGen list of the isospin build checks: the Faust UGen woodbar and the
+# hand-written test UGen IsoFixture. scripts/check-native.py builds with this
+# file to test the path for hand-written UGens next to a Faust UGen. It is not
+# the release list; that is supercollider.toml in the repository root.
+# Paths are relative to the repository root, as in the release list.
+
+[[ugen]]
+dsp = "woodbar.dsp"
+class = "Woodbar"
+prefix = "Phys"
+
+[[native]]
+name = "IsoFixture"
+dir = "tests/fixtures/native/fixture"
+core = ["fixture_core.cpp"]
+plugin = ["IsoFixture.cpp"]
+classes = ["IsoFixture.sc"]
+load = "IsoFixture_Load"
+tests = ["test/fixture_core_test.cpp"]

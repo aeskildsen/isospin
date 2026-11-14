@@ -1,0 +1,63 @@
+# Build checks for the static SuperCollider UGen sources (scripts/check-native.py).
+#
+# For the release UGen list (supercollider.toml) and for the test list
+# (tests/fixtures/supercollider.toml, which has a hand-written test UGen):
+# compile every source against stock SuperCollider headers and against
+# SuperSonic's headers, link each set, and run the tests of the hand-written
+# UGens with AddressSanitizer and UndefinedBehaviorSanitizer.
+#
+# The tools come from the same pinned nixpkgs as the release. The headers come
+# from pinned commits. Change a pin only on purpose; keep SUPERSONIC at the
+# SuperSonic version that flux-engine uses.
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # nixpkgs with Faust 2.85.9 (the same as release.yml).
+  NIXPKGS: github:NixOS/nixpkgs/7fd4004d0511991fff3a0524856a9be09e28c5f0
+  # SuperCollider Version-3.14.1.
+  SC_REPO: https://github.com/supercollider/supercollider.git
+  SC_COMMIT: 426edf6d8742e1cc3bd85b51ca0c4e595d37a903
+  # SuperSonic v0.95.1.
+  SUPERSONIC_REPO: https://github.com/samaaron/supersonic.git
+  SUPERSONIC_COMMIT: f395a0f24c43419b7019718f88807bd3a3b71ddb
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Get the SuperCollider and SuperSonic headers
+        run: |
+          fetch() {  # fetch <repo> <commit> <folder>: one commit, no history
+            git init -q "$3"
+            git -C "$3" fetch -q --depth 1 "$1" "$2"
+            git -C "$3" checkout -q FETCH_HEAD
+          }
+          fetch "$SC_REPO" "$SC_COMMIT" "$RUNNER_TEMP/supercollider"
+          fetch "$SUPERSONIC_REPO" "$SUPERSONIC_COMMIT" "$RUNNER_TEMP/supersonic"
+
+      - name: Check the release UGens
+        run: |
+          nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" "$NIXPKGS#gcc" --command \
+            python3 -I scripts/check-native.py \
+              --manifest supercollider.toml \
+              --sc-include "$RUNNER_TEMP/supercollider/include" \
+              --supersonic "$RUNNER_TEMP/supersonic"
+
+      - name: Check the test UGens
+        run: |
+          nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" "$NIXPKGS#gcc" --command \
+            python3 -I scripts/check-native.py \
+              --sc-include "$RUNNER_TEMP/supercollider/include" \
+              --supersonic "$RUNNER_TEMP/supersonic"
