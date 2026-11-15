@@ -1,3 +1,9 @@
 /build/
 /dist/
 __pycache__/
+
+# Tailor writes these Nix fragments on each alter. The flake does not use them.
+/nix/
+
+# direnv cache of the Nix dev shell
+/.direnv/

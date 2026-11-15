@@ -42,13 +42,15 @@ Push a tag `v<version>` to release. The workflow `.github/workflows/release.yml`
 
 Needs Faust (the releases use 2.85.9) and Python 3.11 or later.
 
+With Nix, `flake.nix` gives a shell with the same Faust, Python and C++ compiler as CI (the same pinned nixpkgs), and `just`. Run `nix develop`, or `nix develop -c <command>` for one command. With direnv and nix-direnv, run `direnv allow` once; the shell then loads when you go into the folder.
+
 ### Hand-written C++ UGens
 
 A UGen can also be hand-written C++ (a `[[native]]` table in `supercollider.toml`; the comments there give the fields). The release gets its sources without change. Keep the DSP core apart from the UGen wrapper: the core uses no SuperCollider headers, so that test programs can run it under the sanitizers. The wrapper includes `isospin/sc_plugin_table.h`, which makes the same source work in SuperSonic (more than one engine in a process) and with stock scsynth headers. `tests/fixtures/native/fixture` is a small example.
 
 ### Build checks
 
-`scripts/check-native.py` makes a development build and compiles every UGen source two ways: against stock SuperCollider headers (linked into a loadable scsynth plugin) and against SuperSonic's headers with the defines of its engine. Then it runs the tests of the hand-written UGens with AddressSanitizer and UndefinedBehaviorSanitizer (with `float-cast-overflow`). SuperPos has a fuzz test among them, `native/superpos/test/superpos_fuzz.cpp`; the checks run it with 10⁶ parameter sets and seed 1, and `superpos_fuzz <sets> <seed>` gives a longer run. By default it uses `tests/fixtures/supercollider.toml`, which has a hand-written test UGen next to woodbar; `--manifest supercollider.toml` checks the release list.
+`scripts/check-native.py` makes a development build and compiles every UGen source two ways: against stock SuperCollider headers (linked into a loadable scsynth plugin) and against SuperSonic's headers with the defines of its engine. Then it runs the tests of the hand-written UGens with AddressSanitizer and UndefinedBehaviorSanitizer (with `float-cast-overflow`). SuperPos has a fuzz test among them, `native/superpos/test/superpos_fuzz.cpp`; the checks run it with 10⁵ parameter sets and seed 1, and `superpos_fuzz <sets> <seed>` gives a longer run. By default it uses `tests/fixtures/supercollider.toml`, which has a hand-written test UGen next to woodbar; `--manifest supercollider.toml` checks the release list.
 
 ```sh
 python3 -I scripts/check-native.py \

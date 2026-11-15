@@ -28,7 +28,7 @@ fields of SCUnit as uninitialised. The DSP core (`core`) keeps them.
 
 Usage:
     check-native.py --sc-include DIR --supersonic DIR [--manifest FILE]
-                    [--work DIR]
+                    [--work DIR] [--skip-test PATH ...]
 
     --sc-include  The SuperCollider header folder that has plugin_interface/,
                   common/ and server/: <prefix>/include/SuperCollider of an
@@ -37,6 +37,9 @@ Usage:
     --manifest    The UGen list (default: tests/fixtures/supercollider.toml,
                   which has a Faust UGen and a hand-written test UGen).
     --work        The work folder (default: a temporary folder).
+    --skip-test   A test program not to build and run, as the manifest names
+                  it (for example test/superpos_fuzz.cpp). Can be given more
+                  than one time. For a fast local check; CI runs all tests.
 
 Needs faust, a C++17 compiler (CXX, default c++) with the sanitizers, and
 Python 3.11 or later.
@@ -195,11 +198,14 @@ def compile_variant(cxx: list[str], variant: Variant, out: Path, work: Path,
     print(f"OK: {variant.name}: {library}", flush=True)
 
 
-def run_tests(cxx: list[str], work: Path, natives: list[dict]) -> int:
+def run_tests(cxx: list[str], work: Path, natives: list[dict], skip: set[str]) -> int:
     count = 0
     for n in natives:
         folder = ROOT / n["dir"]
         for test in n["tests"]:
+            if test in skip:
+                print(f"== {n['name']}: {test} skipped (--skip-test)", flush=True)
+                continue
             print(f"== {n['name']}: {test} with sanitizers", flush=True)
             exe = work / "tests" / n["name"] / Path(test).stem
             exe.parent.mkdir(parents=True, exist_ok=True)
@@ -221,6 +227,7 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path,
                         default=ROOT / "tests" / "fixtures" / "supercollider.toml")
     parser.add_argument("--work", type=Path)
+    parser.add_argument("--skip-test", action="append", default=[], metavar="PATH")
     args = parser.parse_args()
 
     sc_include = args.sc_include.resolve()
@@ -235,6 +242,9 @@ def main() -> None:
     build = load_build_script()
     manifest = args.manifest.resolve()
     ugens, natives = build.read_manifest(manifest)
+    unknown = set(args.skip_test) - {t for n in natives for t in n["tests"]}
+    if unknown:
+        sys.exit(f"check-native: --skip-test names no test in {manifest}: {', '.join(sorted(unknown))}")
 
     with tempfile.TemporaryDirectory() as tmp:
         work = (args.work or Path(tmp)).resolve()
@@ -250,7 +260,7 @@ def main() -> None:
         for variant in (stock, guest):
             compile_variant(cxx, variant, out, work, ugens, natives)
 
-        tests = run_tests(cxx, work, natives)
+        tests = run_tests(cxx, work, natives, set(args.skip_test))
 
     print(f"check-native: OK ({len(ugens)} Faust UGens, {len(natives)} hand-written "
           f"UGens, {tests} tests)")

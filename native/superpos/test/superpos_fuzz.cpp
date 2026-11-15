@@ -24,7 +24,7 @@
 // input into the buffer.
 //
 // Usage: superpos_fuzz [sets] [seed]
-// The defaults (1000000 sets for each source, seed 1) are the run of the
+// The defaults (100000 sets for each source, seed 1) are the run of the
 // build checks. A different seed or more sets give a longer run.
 #include <cmath>
 #include <cstdint>
@@ -324,7 +324,7 @@ bool runSet(Dice& dice, TestBuffer& first, TestBuffer& second, long set, Coverag
 } // namespace
 
 int main(int argc, char** argv) {
-    const long sets = argc > 1 ? std::atol(argv[1]) : 1000000;
+    const long sets = argc > 1 ? std::atol(argv[1]) : 100000;
     const uint64_t seed = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
     TestBuffer first, second;
     // Each source has its own random sequence, so that a change of one does

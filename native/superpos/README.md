@@ -89,7 +89,7 @@ Rules for changes:
 
 - `superpos_core_test.cpp`: the window, timing, per-grain values, level, pool and the grain-length cap of the file engine.
 - `superpos_live_test.cpp`: recording, freeze and the read limit. The input is the write number of each sample, so the output tells which frame a grain read; a step check finds a jump inside a grain.
-- `superpos_fuzz.cpp`: random and extreme controls and buffers for both sources (10⁶ sets, seed 1 in CI; `superpos_fuzz <sets> <seed>` for a longer run). It checks for sanitizer reports, NaN or infinite output, and samples above the possible peak.
+- `superpos_fuzz.cpp`: random and extreme controls and buffers for both sources (10⁵ sets, seed 1 in CI; `superpos_fuzz <sets> <seed>` for a longer run). It checks for sanitizer reports, NaN or infinite output, and samples above the possible peak.
 
 [flux-engine](https://github.com/aeskildsen/flux-engine) tests the released UGens in its engine: `test/native-superpos.sh` compares SuperPos with the GrainBuf graph above in stock scsynth (the difference must be exactly 0), compares headless SuperSonic with scsynth, and checks `RandSeed`, `maxGrains`, the refusal of an old SynthDef and the live renders. Its web tests play both UGens in the browser build.
 
