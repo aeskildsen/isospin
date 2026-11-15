@@ -35,24 +35,25 @@ superpos::Controls hardLeft(superpos::Controls c) {
 // Runs the core as the UGen does: one primed sample, then whole blocks.
 // Returns `total` samples of the left channel, from the first block on (the
 // primed sample is not in it); `rightOut` gets the right channel. The read
-// pointer of the file source moves at `pointerRate`.
+// pointer of the file source moves at `pointerRate`. A block has `blockSize`
+// samples.
 std::vector<float> render(const superpos::BufferView& buf, const superpos::Controls& c, int total,
                           int* maxActive = nullptr, std::vector<float>* rightOut = nullptr,
-                          float pointerRate = 1.f, int poolSize = kMaxGrains) {
+                          float pointerRate = 1.f, int poolSize = kMaxGrains, int blockSize = kBlock) {
     std::vector<superpos::Grain> pool(poolSize);
     superpos::Core core;
-    core.init(pool.data(), poolSize, kSampleRate, kBlock);
+    core.init(pool.data(), poolSize, kSampleRate, blockSize);
     core.source().setPointerRate(pointerRate);
     float primedLeft = 0.f, primedRight = 0.f;
     core.prime(buf, c, &primedLeft, &primedRight);
     int most = core.activeGrains();
     // The primed sample is the output of the constructor; the first block
     // starts again at index 0 of the server's buffer.
-    std::vector<float> block(kBlock), blockRight(kBlock);
+    std::vector<float> block(blockSize), blockRight(blockSize);
     std::vector<float> result, right;
     result.reserve(total);
     while (static_cast<int>(result.size()) < total) {
-        core.process(buf, c, block.data(), blockRight.data(), kBlock);
+        core.process(buf, c, block.data(), blockRight.data(), blockSize);
         if (core.activeGrains() > most)
             most = core.activeGrains();
         result.insert(result.end(), block.begin(), block.end());
@@ -259,6 +260,39 @@ void testRecovery() {
     std::printf("recovery: %ld grains after valid controls, peak %.3f\n", core.startedGrains() - before, peak);
     check(core.startedGrains() - before > 20, "valid controls start grains again");
     check(peak > 0.5f, "valid controls give sound again");
+}
+
+// After a very long grainDur with a large overlap, the pool is full of long
+// grains that are near silent. A grain plays for at most 10 s, so the cloud
+// starts again at most 10 s after the controls are valid.
+void testLongGrainRecovery() {
+    std::vector<float> data(1000, 1.f);
+    const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
+    for (const superpos::Controls& bad : { superpos::Controls { 1e30f, 1e32f, 0.f },
+                                           superpos::Controls { 3600.f, 360000.f, 0.f } }) {
+        std::vector<superpos::Grain> pool(kMaxGrains);
+        superpos::Core core;
+        core.init(pool.data(), kMaxGrains, kSampleRate, kBlock);
+        std::vector<float> block(kBlock), blockRight(kBlock);
+        core.prime(ones, bad, block.data(), blockRight.data());
+        for (int k = 0; k < 2 * 750; ++k)
+            core.process(ones, bad, block.data(), blockRight.data(), kBlock);
+        const long before = core.startedGrains();
+        long firstStart = -1;
+        float peak = 0.f;
+        for (int k = 0; k < 11 * 750; ++k) {
+            core.process(ones, kTiming, block.data(), blockRight.data(), kBlock);
+            if (firstStart < 0 && core.startedGrains() > before)
+                firstStart = static_cast<long>(k) * kBlock;
+            if (k >= 10 * 750)
+                for (float v : block)
+                    peak = std::fmax(peak, std::fabs(v));
+        }
+        std::printf("long grains (grainDur %g): first new grain after %.2f s; peak in the last second %.3f\n",
+                    bad.grainDur, firstStart / kSampleRate, peak);
+        check(firstStart >= 0 && firstStart <= 10.1 * kSampleRate, "long grains: a new grain starts within 10 s");
+        check(peak > 0.5f, "long grains: the cloud plays again");
+    }
 }
 
 // The expected window at sample k of a grain of n samples, for a texture.
@@ -496,6 +530,46 @@ void testLevel() {
     check(plainHigh - plainLow > 15., "without normalize the level rises with the overlap");
 }
 
+// The longest grain is 10 s; shorter grains play their full length. One grain
+// of 2 s on a buffer of ones sounds for 2 s.
+void testLongGrainPlaysFully() {
+    std::vector<float> data(1000, 1.f);
+    const superpos::BufferView ones { data.data(), 1000, 1, kSampleRate };
+    superpos::Controls c { 2.f, 0.05f, 0.f };
+    c.normalize = 0.f;
+    const std::vector<float> out = render(ones, c, 120000);
+    long sounding = 0;
+    for (float v : out)
+        sounding += v != 0.f;
+    std::printf("long grain: a grain of 2 s sounds for %ld samples\n", sounding);
+    check(sounding >= 95990 && sounding <= 96000, "a grain shorter than 10 s plays its full length");
+}
+
+// The level control counts the grains that play in each sample, so the level
+// does not depend on the grain length or the block size. Before, a grain that
+// ended in a block counted for the whole block, and short grains were 3 dB
+// softer.
+void testLevelShortGrains() {
+    const std::vector<float> data = whiteNoise(96000);
+    const superpos::BufferView noise { data.data(), 96000, 1, kSampleRate };
+    for (float overlap : { 1.f, 10.f }) {
+        double low = 1e9, high = -1e9;
+        for (int blockSize : { 64, 128 }) {
+            for (float grainDur : { 0.002f, 0.01f, 0.05f }) {
+                superpos::Controls c { grainDur, overlap, 0.f };
+                c.scatter = 0.5f;
+                const double level =
+                    rmsDb(render(noise, c, 96000, nullptr, nullptr, 0.5f, kMaxGrains, blockSize), 24000);
+                std::printf("level: overlap %2.0f, block %3d, grainDur %.3f: %6.2f dB\n", overlap, blockSize,
+                            grainDur, level);
+                low = std::fmin(low, level);
+                high = std::fmax(high, level);
+            }
+        }
+        check(high - low <= 1., "normalize: the level does not depend on the grain length or the block size");
+    }
+}
+
 // With normalize 0 the output is the plain sum of the grains: the same as
 // the output without the level control (checked against GrainBuf in the
 // flux-engine tests). Here: one grain on a buffer of ones has its window.
@@ -570,12 +644,15 @@ int main() {
     testProbability();
     testSeed();
     testRecovery();
+    testLongGrainRecovery();
+    testLongGrainPlaysFully();
     testTextureShapes();
     testTextureHeldPerGrain();
     testCentre();
     testPanLaw();
     testRandomRanges();
     testLevel();
+    testLevelShortGrains();
     testNormalizeOff();
     testFullPool();
     std::printf("%s\n", failures ? "superpos_core_test: FAIL" : "superpos_core_test: OK");

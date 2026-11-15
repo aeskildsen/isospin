@@ -114,6 +114,8 @@ def read_manifest(path: Path) -> tuple[list[dict], list[dict]]:
                 sys.exit(f"{path.name}: [[native]] {name}: {key} must be a list of paths")
         if not native["plugin"]:
             sys.exit(f"{path.name}: [[native]] {name}: plugin needs at least one source")
+        if not isinstance(native.setdefault("notice", ""), str):
+            sys.exit(f"{path.name}: [[native]] {name}: notice must be a string")
         folder = ROOT / native["dir"]
         for key in ("core", "plugin", "classes", "tests"):
             for rel in native[key]:
@@ -385,6 +387,8 @@ def generate(dest: Path, label: str, kind: str, manifest: Path) -> None:
     for n in natives:
         listing += (f"\n- `{n['name']}` (hand-written C++): `src/{n['name']}/`, "
                     f"load function `{n['load']}`")
+        if n["notice"]:
+            listing += f". {n['notice'].strip()}"
     listing += "\n\nThe SuperCollider class files are in `classes/`."
     notice = NOTICE.format(generated=GENERATED, label=label, ugens=listing)
     if natives:

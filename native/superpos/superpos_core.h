@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Anders Eskildsen
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
+// Parts of superpos_core.cpp are adapted from other projects. See the notice
+// at the top of that file.
+//
 // The DSP core of the SuperPos granular UGens. It uses no SuperCollider
 // headers, so that a test program can use it without a server.
 //
@@ -12,17 +15,26 @@
 //
 // With normalize 0 and the other controls at their defaults (regularity 0,
 // probability 1, texture 1, and detuneStep, scatter, pan and stereoSpread 0),
-// the output is the same as that of this SynthDef graph, sample for sample
-// within float rounding:
+// the output is the same as that of this SynthDef graph, bit for bit, when
+// overlap and grainDur are control-rate inputs:
 //
-//     trig = Impulse.ar(overlap * grainDur.reciprocal);
+//     trig = Impulse.ar(overlap / grainDur);
 //     pos  = Phasor.ar(0, pointerRate * BufRateScale.kr(buf), 0, BufFrames.kr(buf))
 //            / BufFrames.kr(buf);
 //     GrainBuf.ar(2, trig, grainDur, buf, transpose.midiratio, pos, 2, 0, -1, maxGrains + 1)
 //
+// This is true while the length of the buffer does not change. In the block
+// where it changes, `Phasor / BufFrames` divides with a slope from the old
+// length to the new one; the core uses the new length at once.
+//
 // To make this true, the core keeps the order of operations and the float and
 // double types of these UGens in SuperCollider 3.14.1, and also their
-// constructor behaviour (see prime()).
+// constructor behaviour (see prime()). Two details: `overlap / grainDur` is a
+// float division (BinaryOpUGen div_1); `grainDur.reciprocal` is not, because
+// on x86 SuperCollider calculates it with an approximation (sc_reciprocal).
+// `Phasor / BufFrames` multiplies by the float 1 / frames (div_ak).
+// A grain plays for at most 10 seconds (kMaxGrainSeconds), so the cloud
+// starts again soon after a very long grainDur.
 //
 // Regularity moves the grain times from a fixed interval (0) to random
 // intervals (1). Each interval is the regular interval times
@@ -30,7 +42,10 @@
 // exponential distribution and a mean of 1. So the mean interval stays the
 // same at every regularity, and at 1 the grain times are a Poisson process,
 // as Dust. Probability is the chance that a trigger starts a grain, as
-// CoinGate.
+// CoinGate. A trigger in the sample after a trigger does not start a grain
+// (the start is a rising edge, as in GrainBuf), so with regularity above 0
+// and more than a few thousand grains a second, the mean rate is lower than
+// overlap / grainDur.
 //
 // Texture sets the window of a grain when the grain starts, as the window
 // shape of Mutable Instruments Clouds. Let x be a triangle that goes from 0
@@ -47,17 +62,23 @@
 // equal-power, as GrainBuf with two channels.
 //
 // With normalize on (the default), the output is multiplied by
-// 1 / sqrt(n), where n is the number of active grains, smoothed as in the
+// 1 / sqrt(n), where n is the mean number of grains that played in each
+// sample of the block, smoothed as in the
 // granular player of Clouds: the count follows a rise in 0.43 ms and a fall
 // in 4.5 ms, and the gain follows its target in 3.1 ms. For grains that are
 // not correlated (a noise buffer, or a pointer that does not move with the
-// grains) the level then stays the same at all overlaps. With normalize off
-// the output is the plain sum of the grains.
+// grains) the level then stays the same at all overlaps. With regular
+// timing it also stays within about 0.3 dB for all grain lengths and block
+// sizes. With random timing (regularity 1) and very short grains at a low
+// overlap it can change by about 1 dB with the grain length and 0.5 dB with
+// the block size, because the count is smoothed once in each block. With
+// normalize off the output is the plain sum of the grains.
 //
 // Load: the pool has a fixed size. When it is full, a new grain does not
 // start (the grains that play are not cut). All grains use the same linear
 // interpolation at all loads, so a dense cloud sounds as a sparse one.
 
+#include <cmath>
 #include <cstdint>
 
 namespace superpos {
@@ -69,6 +90,12 @@ struct Grain {
     double b1, y1, y2; // the sine recurrence of the Hann window
     float amp; // the Hann window value for the next sample
     int counter; // samples that the grain has still to play
+    // A fade-out to the end of the grain (see LiveSource): `fading` is true.
+    // When `counter` is at most `fadeFrom`, the gain `fade` falls by
+    // `fadeStep` in each sample, and it is 0 in the last sample.
+    bool fading;
+    float fade, fadeStep;
+    int fadeFrom;
     // The window shape, set from the texture when the grain starts.
     double tri, triInc; // 2 * (k + 1) / length at sample k: the triangle phase
     float slope; // > 0: a trapezoid, min(1, triangle * slope)
@@ -141,8 +168,25 @@ private:
 //   end(keepState)          after the block. With keepState false (the
 //                           constructor sample), the state goes back to that
 //                           before begin().
+//   rateScale(buf, sampleDur)
+//                           the read speed of a grain at transpose 0, in
+//                           frames per sample.
+//   limitsChanged()         true when the grains that play can read across
+//                           a record head from this block on (see
+//                           LiveSource); the engine then calls
+//   samplesBeforeCross(buf, phase, rate)
+//                           for each grain that plays.
 class FileSource {
 public:
+    // The file source has no record head.
+    bool limitsChanged() const { return false; }
+    double samplesBeforeCross(const BufferView&, double, double) const { return INFINITY; }
+
+    // As BufRateScale.kr: the buffer rate over the server rate.
+    float rateScale(const BufferView& buf, double sampleDur) const {
+        return static_cast<float>(static_cast<float>(buf.sampleRate) * sampleDur);
+    }
+
     // The speed of the read pointer, 1 = the speed of the buffer. Read in
     // begin().
     void setPointerRate(float rate) { mPointerRate = rate; }
@@ -153,7 +197,8 @@ public:
 
     void tick() {
         mWork = wrapPointer(mWork);
-        mPos = static_cast<float>(mWork) / mFrames;
+        // As `Phasor / BufFrames`: a multiplication by the float 1 / frames.
+        mPos = static_cast<float>(mWork) * mFramesRecip;
         mGrainPointer = mWork;
         mWork += mRate;
     }
@@ -173,6 +218,7 @@ private:
     double mWork = 0.0; // the pointer during a block
     double mRate = 0.0; // frames per sample in this block
     float mFrames = 0.f;
+    float mFramesRecip = 0.f; // 1 / mFrames in float, 0 with no frames
     float mPos = 0.f; // the pointer as a part of the buffer length, this sample
     double mGrainPointer = 0.0; // the pointer in frames, this sample
 };
@@ -208,6 +254,11 @@ public:
     // since init(), for tests.
     long droppedGrains() const { return mDropped; }
 
+    // The number of times that a grain was shortened or stopped because it
+    // would read across a record head (see LiveSource), since init(), for
+    // tests.
+    long fadedGrains() const { return mFaded; }
+
 
     // The number of grains that started since init(), for tests.
     long startedGrains() const { return mStarted; }
@@ -221,12 +272,17 @@ private:
     double nextIntervalScale(float regularity);
     void advance(const BufferView& buf, const Controls& c, float* left, float* right, int n, bool keepState);
     void applyLevel(float* left, float* right, int n, bool keepState);
+    void limitGrains(const BufferView& buf);
 
     Grain* mPool = nullptr;
     int mMaxGrains = 0;
     int mNumActive = 0;
     double mSampleRate = 0.0;
     double mSampleDur = 0.0;
+    double mMaxGrainSamples = 0.0; // kMaxGrainSeconds at the sample rate
+    // The samples that all grains played in this block, for the level
+    // control.
+    long mPlayed = 0;
     double mSlopeFactor = 0.0; // 1 / block size, as SuperCollider's CALCSLOPE
 
     // The trigger: a wrapping phase, as Impulse.
@@ -242,6 +298,7 @@ private:
     Random mRandom;
     long mStarted = 0;
     long mDropped = 0;
+    long mFaded = 0;
     GrainStart mLastStart {};
 
     // The level control: the smoothed grain count, the gain, and the
@@ -264,13 +321,36 @@ private:
 // block ahead of the head already hold input that comes later in the block.
 // place() moves the start so that the distance stays in
 // [kMinDistance, frames - kMinDistance - blockSize] for the whole grain, or
-// gives NaN (no grain) when the grain does not fit in the buffer. The limit
-// holds while freeze does not change during the grain.
+// gives NaN (no grain) when the grain does not fit in the buffer.
+//
+// When freeze changes, the head speed changes, and a grain that plays can
+// reach the limit before it ends. When the buffer changes (another buffer,
+// or a new length), the head and the limits move. At the start of such a
+// block the engine asks samplesBeforeCross() for each grain. A grain that
+// would reach the limit plays on, and ends before the limit with a linear
+// fade-out over its last samples (kFadeSeconds, or all of the samples it has
+// when that is less). A grain that is already outside the limit stops at
+// once.
 class LiveSource {
 public:
     // The distance from the head, in frames, that a read stays away from. 2:
     // linear interpolation reads the frame after the read position too.
     static constexpr double kMinDistance = 2.0;
+
+    // The input is recorded at the server rate, so a grain at transpose 0
+    // reads one frame in each sample, whatever the sample rate of the buffer.
+    float rateScale(const BufferView&, double) const { return 1.f; }
+
+    // True when freeze or the buffer (its memory or its length) changed in
+    // this block. Valid after begin().
+    bool limitsChanged() const { return mLimitsChanged; }
+
+    // The number of samples from the start of this block that a grain at
+    // `phase` (frames) with `rate` (frames per sample) can play before its
+    // distance from the head leaves the limits of place(). 0 when it is out
+    // of the limits now; infinity when it does not leave them. Valid after
+    // begin().
+    double samplesBeforeCross(const BufferView& buf, double phase, double rate) const;
 
     // The controls of a block. `in` holds the input samples; with `inStep` 0
     // it holds one value for the whole block (an input that is not at audio
@@ -290,8 +370,12 @@ public:
     double place(const BufferView& buf, bool scattered, double scatterFrames, double rate, double length) const;
 
     void end(bool keepState) {
-        if (keepState)
+        if (keepState) {
             mHead = mHeadEnd;
+            mWasFrozen = mFrozen;
+            mLastData = mData;
+            mLastFrames = mFrames;
+        }
     }
 
     // The record head in frames, for tests.
@@ -302,6 +386,12 @@ private:
     int mInStep = 0;
     float* mData = nullptr;
     bool mFrozen = false;
+    bool mWasFrozen = false; // freeze in the block before
+    // The buffer of this block and of the block before. mFrames is 0 when
+    // the buffer cannot make grains.
+    uint32_t mFrames = 0, mLastFrames = 0;
+    const float* mLastData = nullptr;
+    bool mLimitsChanged = false;
     double mPosition = 0.0;
 
     int mBlockSize = 0;

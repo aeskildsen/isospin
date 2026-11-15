@@ -19,7 +19,13 @@ env:
   NIXPKGS: github:NixOS/nixpkgs/7fd4004d0511991fff3a0524856a9be09e28c5f0
 
 jobs:
+  # The build checks of check.yml, on the tagged commit. No release when they
+  # fail.
+  check:
+    uses: ./.github/workflows/check.yml
+
   release:
+    needs: check
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

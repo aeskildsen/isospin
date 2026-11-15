@@ -112,6 +112,8 @@ superpos::Controls randomControls(Dice& dice, float& pointerRate) {
     c.scatter = control(dice, 0., 1.);
     c.pan = control(dice, -1., 1.);
     c.stereoSpread = control(dice, 0., 1.);
+    // The level control: on, off, or an extreme value.
+    c.normalize = control(dice, 0., 1.);
     return c;
 }
 
@@ -184,6 +186,10 @@ struct Coverage {
     long setsWithGrains = 0;
     long setsWithFullPool = 0;
     long grains = 0;
+    // Grains shortened or stopped at a record head (live source only).
+    long faded = 0;
+    // Blocks with the level control on and off.
+    long normalizeOn = 0, normalizeOff = 0;
 };
 
 struct Failure {
@@ -196,6 +202,7 @@ struct Failure {
 struct FileMode {
     using Engine = superpos::Core;
     static constexpr const char* name = "file";
+    static constexpr bool kHasHead = false;
     float pointerRate = 1.f;
 
     void draw(Dice&, float rate) { pointerRate = rate; }
@@ -212,6 +219,7 @@ struct FileMode {
 struct LiveMode {
     using Engine = superpos::LiveCore;
     static constexpr const char* name = "live";
+    static constexpr bool kHasHead = true;
     float freeze = 0.f, position = 0.f;
     bool constant = false;
     float in[kBlock];
@@ -223,6 +231,9 @@ struct LiveMode {
     }
 
     void apply(Engine& core, TestBuffer& b, Dice& dice, int n) {
+        // Freeze can change while grains play (the fade-out of LiveSource).
+        if (dice.below(3) == 0)
+            freeze = control(dice, 0., 1.);
         for (int i = 0; i < n; ++i)
             in[i] = static_cast<float>(dice.range(-1., 1.));
         float* data = b.view.frames > 0 && !b.data.empty() ? b.data.data() : nullptr;
@@ -291,6 +302,10 @@ bool runSet(Dice& dice, TestBuffer& first, TestBuffer& second, long set, Coverag
         const long activeBefore = core.activeGrains();
         const long startedBefore = core.startedGrains();
         core.process(b.view, c, left, right, n);
+        if (c.normalize < 0.5f)
+            ++coverage.normalizeOff;
+        else
+            ++coverage.normalizeOn;
         if (!checkBlock(n, peak, activeBefore + core.startedGrains() - startedBefore))
             return false;
         if (core.activeGrains() < 0 || core.activeGrains() > poolSize) {
@@ -300,6 +315,7 @@ bool runSet(Dice& dice, TestBuffer& first, TestBuffer& second, long set, Coverag
         fullPool = fullPool || core.activeGrains() == poolSize;
     }
     coverage.grains += core.startedGrains();
+    coverage.faded += core.fadedGrains();
     coverage.setsWithGrains += core.startedGrains() > 0;
     coverage.setsWithFullPool += fullPool;
     return true;
@@ -325,8 +341,21 @@ int main(int argc, char** argv) {
                 return false;
             }
         }
-        std::printf("superpos_fuzz: %s source: %ld grains; %ld sets with grains, %ld with a full pool\n", Mode::name,
-                    coverage.grains, coverage.setsWithGrains, coverage.setsWithFullPool);
+        std::printf("superpos_fuzz: %s source: %ld grains; %ld sets with grains, %ld with a full pool; %ld grains "
+                    "faded at a record head; %ld blocks with normalize on, %ld off\n",
+                    Mode::name, coverage.grains, coverage.setsWithGrains, coverage.setsWithFullPool, coverage.faded,
+                    coverage.normalizeOn, coverage.normalizeOff);
+        // A run of the default length must reach the paths that it tests.
+        if (sets >= 100000) {
+            const bool fadesReached = !Mode::kHasHead || coverage.faded > 1000;
+            if (!fadesReached || coverage.normalizeOn < 1000 || coverage.normalizeOff < 1000
+                || coverage.setsWithFullPool < 100) {
+                std::printf("superpos_fuzz: FAIL (%s source): the run did not reach the fade-out, both normalize "
+                            "settings and a full pool often enough\n",
+                            Mode::name);
+                return false;
+            }
+        }
         return true;
     };
     if (!runAll(FileMode {}, seed) || !runAll(LiveMode {}, seed ^ 0x5eed5eed5eed5eedull))

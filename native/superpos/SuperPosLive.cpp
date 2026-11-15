@@ -23,7 +23,8 @@ namespace {
 
 class SuperPosLive : public superpos::GrainUnit<superpos::LiveCore> {
 public:
-    SuperPosLive() : GrainUnit(15) {
+    // Inputs 0 to 6 (up to transpose) have no default.
+    SuperPosLive() : GrainUnit(15, 7) {
         if (!mPool) {
             failed();
             return;

@@ -7,7 +7,8 @@
 // Inputs (all read once in each block):
 //   0 bufnum       the buffer (one channel)
 //   1 pointerRate  the speed of the read pointer, 1 = the speed of the buffer
-//   2 grainDur     the grain duration in seconds
+//   2 grainDur     the grain duration in seconds (a grain plays for at most
+//                  10 s)
 //   3 overlap      grains at the same time, on average
 //   4 transpose    semitones
 //   5 regularity   0 = a fixed grain interval, 1 = random intervals
@@ -27,6 +28,8 @@
 // Outputs: 0 left, 1 right.
 //
 // A SynthDef with fewer inputs gets the default value of each missing input.
+// A SynthDef with a SuperPos unit that does not have two outputs (from the
+// class file before the stereo output) gives silence and a message.
 #include "superpos_unit.h"
 
 // Registers SuperPosLive (SuperPosLive.cpp).
@@ -36,7 +39,8 @@ namespace {
 
 class SuperPos : public superpos::GrainUnit<superpos::Core> {
 public:
-    SuperPos() : GrainUnit(13) {
+    // Inputs 0 to 4 have no default: every class file had them.
+    SuperPos() : GrainUnit(13, 5) {
         if (!mPool) {
             failed();
             return;

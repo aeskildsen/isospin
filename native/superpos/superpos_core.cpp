@@ -1,5 +1,45 @@
 // Copyright (C) 2026 Anders Eskildsen
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later AND GPL-3.0-or-later AND MIT
+//
+// Parts of this file are adapted from other projects:
+//
+// SuperCollider 3.14.1 (https://github.com/supercollider/supercollider):
+// wrap() (sc_wrap), loopPosition() (sc_gloop), wrapTrigger() (Impulse),
+// fold() (sc_fold), Random (RGen), and the grain loop, the Hann window
+// recurrence and the pan law of GrainBuf (server/plugins/GrainUGens.cpp).
+//     Copyright (c) 2002 James McCartney. All rights reserved.
+//     GrainUGens.cpp also says: "Created by Josh Parmenter on 2/4/05.
+//     Copyright 2005 __MyCompanyName__. All rights reserved."
+//     These files are free software under the GNU General Public License,
+//     version 2 or (at your option) any later version. This file uses them
+//     under version 3 or (at your option) any later version, which permits
+//     their combination with the GNU Affero General Public License version 3
+//     (section 13 of each licence).
+//
+// Mutable Instruments Clouds (https://github.com/pichenettes/eurorack,
+// clouds/dsp/grain.h and clouds/dsp/granular_sample_player.h): the window
+// shape of setWindow() and windowGain(), and the time constants of the level
+// control.
+//     Copyright 2014 Emilie Gillet.
+//
+//     Permission is hereby granted, free of charge, to any person obtaining a
+//     copy of this software and associated documentation files (the
+//     "Software"), to deal in the Software without restriction, including
+//     without limitation the rights to use, copy, modify, merge, publish,
+//     distribute, sublicense, and/or sell copies of the Software, and to
+//     permit persons to whom the Software is furnished to do so, subject to
+//     the following conditions:
+//
+//     The above copyright notice and this permission notice shall be included
+//     in all copies or substantial portions of the Software.
+//
+//     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//     OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//     MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+//     IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+//     CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+//     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+//     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "superpos_core.h"
 
 #include <algorithm>
@@ -8,6 +48,14 @@
 namespace superpos {
 
 namespace {
+
+// The helpers of the per-sample grain loop must be inlined into it. GCC at
+// -O2 does not inline them into both versions of playGrainWith by itself.
+#if defined(__GNUC__) || defined(__clang__)
+#define SUPERPOS_INLINE inline __attribute__((always_inline))
+#else
+#define SUPERPOS_INLINE inline
+#endif
 
 // constexpr: SuperSonic's web build does not run the dynamic initialisation
 // of namespace-scope variables, so std::acos(-1.) here would stay 0.
@@ -38,7 +86,7 @@ double wrap(double in, double lo, double hi) {
 
 // Wraps a read position into [0, hi), as sc_gloop of GrainBuf, but the result
 // is always in [0, hi).
-double loopPosition(double in, double hi) {
+SUPERPOS_INLINE double loopPosition(double in, double hi) {
     if (in >= hi) {
         in -= hi;
         if (in < hi)
@@ -90,8 +138,16 @@ float unitRange(float x, float otherwise = 0.f) {
     return std::min(std::max(x, 0.f), 1.f);
 }
 
-// The longest grain in samples. It keeps the sample counter in an int.
+// The longest grain. After a very long grainDur, the grains that play end
+// after this time at most, and the cloud starts again.
+constexpr double kMaxGrainSeconds = 10.0;
+// The longest grain in samples at any sample rate. It keeps the sample
+// counter in an int.
 constexpr double kMaxGrainSamples = 1 << 30;
+
+// The fade-out of a grain that would read across the record head of a live
+// source (see LiveSource).
+constexpr double kFadeSeconds = 0.005;
 
 // The time constants of the level control, from the granular player of
 // Clouds: there the grain count moves by 0.9 (rise) or 0.2 (fall) of the
@@ -119,7 +175,7 @@ void setWindow(Grain& g, float texture, double length) {
 }
 
 // The window value from the Hann value and the triangle phase of the grain.
-float windowGain(const Grain& g, float hann, double tri) {
+SUPERPOS_INLINE float windowGain(const Grain& g, float hann, double tri) {
     float x = static_cast<float>(tri < 1. ? tri : 2. - tri);
     x = std::max(0.f, x);
     if (g.slope > 0.f)
@@ -147,8 +203,8 @@ float fold(float in, float lo, float hi) {
 float finiteOrZero(float x) { return std::isfinite(x) ? x : 0.f; }
 
 // Plays `count` samples of one grain into `left` and `right`, with linear
-// interpolation.
-void playGrain(Grain& g, const BufferView& buf, float* left, float* right, int count) {
+// interpolation. With Fading, the window is multiplied by the fade gain.
+template <bool Fading> void playGrainWith(Grain& g, const BufferView& buf, float* left, float* right, int count) {
     const double loopMax = static_cast<double>(buf.frames);
     const int guardFrame = static_cast<int>(buf.frames) - 2;
     const uint32_t bufSamples = buf.frames * buf.channels;
@@ -159,6 +215,8 @@ void playGrain(Grain& g, const BufferView& buf, float* left, float* right, int c
     // The Hann window (texture 1) uses the Hann value as it is, as GrainBuf.
     const bool hannOnly = g.slope == 0.f && g.smooth >= 1.f;
     double tri = g.tri;
+    float fade = g.fade;
+    const int counter = g.counter;
     for (int j = 0; j < count; ++j) {
         phase = loopPosition(phase, loopMax);
         const int32_t iphase = static_cast<int32_t>(phase);
@@ -169,7 +227,13 @@ void playGrain(Grain& g, const BufferView& buf, float* left, float* right, int c
         const float frac = static_cast<float>(phase - static_cast<double>(iphase));
         const float b = table1[0];
         const float c = table2[0];
-        const float gain = hannOnly ? amp : windowGain(g, amp, tri);
+        float gain = hannOnly ? amp : windowGain(g, amp, tri);
+        if (Fading) {
+            // The fade is in the last fadeFrom samples of the grain.
+            if (counter - j <= g.fadeFrom)
+                fade = std::max(0.f, fade - g.fadeStep);
+            gain *= fade;
+        }
         const float value = gain * (b + frac * (c - b));
         left[j] += value * g.pan1;
         right[j] += value * g.pan2;
@@ -186,7 +250,17 @@ void playGrain(Grain& g, const BufferView& buf, float* left, float* right, int c
     g.y2 = y2;
     g.amp = amp;
     g.tri = tri;
+    g.fade = fade;
     g.counter -= count;
+}
+
+// Plays `count` samples of one grain (see playGrainWith) and returns count.
+int playGrain(Grain& g, const BufferView& buf, float* left, float* right, int count) {
+    if (g.fading)
+        playGrainWith<true>(g, buf, left, right, count);
+    else
+        playGrainWith<false>(g, buf, left, right, count);
+    return count;
 }
 
 
@@ -210,6 +284,7 @@ bool usableBuffer(const BufferView& buf) { return buf.data && buf.channels == 1 
 
 void FileSource::begin(const BufferView& buf, double sampleDur, int) {
     mFrames = static_cast<float>(buf.frames);
+    mFramesRecip = buf.frames > 0 ? 1.f / mFrames : 0.f;
     const float rateScale = static_cast<float>(buf.sampleRate * sampleDur);
     double rate = static_cast<float>(mPointerRate * rateScale);
     // An infinite or NaN rate stops the pointer, as it would make the pointer
@@ -244,6 +319,8 @@ void LiveSource::setInput(const float* in, int inStep, float* data, float freeze
 void LiveSource::begin(const BufferView& buf, double, int n) {
     mTick = -1;
     const uint32_t frames = usableBuffer(buf) ? buf.frames : 0;
+    mFrames = frames;
+    mLimitsChanged = mFrozen != mWasFrozen || frames != mLastFrames || mData != mLastData;
     if (frames == 0) {
         mHeadStart = mHeadEnd = 0;
         return;
@@ -284,13 +361,32 @@ double LiveSource::place(const BufferView& buf, bool scattered, double scatterFr
     return wrap(head - distance, 0., frames);
 }
 
+double LiveSource::samplesBeforeCross(const BufferView& buf, double phase, double rate) const {
+    const double frames = buf.frames;
+    // The limits of place() for the distance behind the head.
+    const double lo = kMinDistance;
+    const double hi = frames - kMinDistance - mBlockSize;
+    const double distance = wrap(static_cast<double>(mHeadStart) - phase, 0., frames);
+    if (!(distance >= lo && distance <= hi))
+        return 0.;
+    // The distance changes by this value in each sample.
+    const double speed = (mFrozen ? 0.0 : 1.0) - rate;
+    if (speed > 0.)
+        return (hi - distance) / speed;
+    if (speed < 0.)
+        return (lo - distance) / speed;
+    return INFINITY;
+}
+
 template <class Source> void Engine<Source>::init(Grain* pool, int maxGrains, double sampleRate, int blockSize) {
     mPool = pool;
     mMaxGrains = std::max(0, maxGrains);
     mDropped = 0;
+    mFaded = 0;
     mNumActive = 0;
     mSampleRate = sampleRate;
     mSampleDur = 1. / sampleRate;
+    mMaxGrainSamples = std::min(kMaxGrainSamples, std::max(4., kMaxGrainSeconds * sampleRate));
     mSlopeFactor = 1. / std::max(1, blockSize);
     mTrigPhase = 1.0;
     mTrigInc = 0.0;
@@ -305,9 +401,10 @@ template <class Source> void Engine<Source>::init(Grain* pool, int maxGrains, do
 }
 
 template <class Source> void Engine<Source>::applyLevel(float* left, float* right, int n, bool keepState) {
-    // The count of this block, smoothed with the coefficient for the length
-    // of the block.
-    const double target = mNumActive;
+    // The mean number of grains that played in each sample of this block
+    // (a grain that ends in the block counts for the samples that it
+    // played), smoothed with the coefficient for the length of the block.
+    const double target = static_cast<double>(mPlayed) / n;
     const double seconds = target > mGrainCount ? kCountRiseSeconds : kCountFallSeconds;
     const double count = mGrainCount + (1.0 - std::exp(-n * mSampleDur / seconds)) * (target - mGrainCount);
     const double gainTarget = 1.0 / std::sqrt(std::max(1.0, count));
@@ -346,15 +443,22 @@ void Engine<Source>::process(const BufferView& buf, const Controls& c, float* le
 template <class Source>
 void Engine<Source>::advance(const BufferView& buf, const Controls& c, float* left, float* right, int n,
                              bool keepState) {
+    // A block without samples changes nothing (the level control divides by
+    // n).
+    if (n <= 0)
+        return;
     mSource.begin(buf, mSampleDur, n);
+    if (mSource.limitsChanged())
+        limitGrains(buf);
     std::fill(left, left + n, 0.f);
     std::fill(right, right + n, 0.f);
+    mPlayed = 0;
     playActive(buf, left, right, n);
 
     // The trigger frequency and its phase increment, in the float and double
     // steps of the SynthDef. The increment moves linearly over the block to a
     // new value.
-    const float trigFreq = c.overlap * (1.f / c.grainDur);
+    const float trigFreq = c.overlap / c.grainDur;
     const float freqMul = static_cast<float>(mSampleDur);
     double inc = static_cast<float>(trigFreq * freqMul);
     // A grainDur of 0, or an infinite or NaN control, gives no trigger. The
@@ -419,8 +523,39 @@ template <class Source> void Engine<Source>::playActive(const BufferView& buf, f
             continue;
         }
         if (canRead)
-            playGrain(g, buf, left, right, std::min(g.counter, n));
+            mPlayed += playGrain(g, buf, left, right, std::min(g.counter, n));
         ++i;
+    }
+}
+
+template <class Source> void Engine<Source>::limitGrains(const BufferView& buf) {
+    if (!usableBuffer(buf))
+        return;
+    const double fadeSamples = std::max(1.0, std::round(kFadeSeconds * mSampleRate));
+    for (int i = 0; i < mNumActive; ++i) {
+        Grain& g = mPool[i];
+        if (g.counter <= 0)
+            continue;
+        const double before = mSource.samplesBeforeCross(buf, g.phase, g.rate);
+        if (!(before < g.counter))
+            continue;
+        // The grain plays on, and ends before it reaches the limit. The fade
+        // is over its last samples, from the gain that it has now.
+        const int remaining = static_cast<int>(std::floor(before));
+        if (remaining < 1) {
+            g.counter = 0;
+            ++mFaded;
+            continue;
+        }
+        const int length = static_cast<int>(std::min(fadeSamples, static_cast<double>(remaining)));
+        if (!g.fading) {
+            g.fading = true;
+            g.fade = 1.f;
+        }
+        g.counter = remaining;
+        g.fadeFrom = length;
+        g.fadeStep = g.fade / static_cast<float>(length);
+        ++mFaded;
     }
 }
 
@@ -451,14 +586,14 @@ void Engine<Source>::startGrain(const BufferView& buf, const Controls& c, float*
         pan = static_cast<float>(pan - spread + mRandom.uniform() * 2. * spread);
     start.pan = fold(pan, -1.f, 1.f);
 
-    const float bufRateScale = static_cast<float>(static_cast<float>(buf.sampleRate) * mSampleDur);
+    const float bufRateScale = mSource.rateScale(buf, mSampleDur);
     float ratio = midiRatio(c.transpose);
     if (start.detune != 0.f)
         ratio *= midiRatio(start.detune);
     const double rate = ratio * bufRateScale;
     double counter = c.grainDur * mSampleRate;
     counter = std::max(4., counter);
-    counter = std::min(kMaxGrainSamples, counter);
+    counter = std::min(mMaxGrainSamples, counter);
     const double phase = mSource.place(buf, scatter != 0.f, start.scatter, rate, counter);
     if (!std::isfinite(phase) || !std::isfinite(rate))
         return;
@@ -480,8 +615,12 @@ void Engine<Source>::startGrain(const BufferView& buf, const Controls& c, float*
     g.y2 = 0.;
     g.amp = static_cast<float>(g.y1 * g.y1);
     setWindow(g, unitRange(c.texture, 1.f), counter);
+    g.fading = false;
+    g.fade = 1.f;
+    g.fadeStep = 0.f;
+    g.fadeFrom = 0;
 
-    playGrain(g, buf, left + offset, right + offset, std::min(g.counter, n - offset));
+    mPlayed += playGrain(g, buf, left + offset, right + offset, std::min(g.counter, n - offset));
     // A grain that ends in its first block leaves the pool at once.
     if (g.counter <= 0)
         --mNumActive;

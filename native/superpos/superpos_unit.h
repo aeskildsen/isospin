@@ -7,8 +7,10 @@
 // The engine controls are 11 inputs after the inputs of the source, in this
 // order: grainDur, overlap, transpose, regularity, probability, texture,
 // detuneStep, scatter, pan, stereoSpread, normalize. A SynthDef with fewer
-// inputs (made with an older class file) gets the default value of each
-// missing input after transpose. After the engine controls comes maxGrains,
+// inputs gets the default value of each missing input after transpose. A
+// SynthDef with a unit that does not have two outputs (from a class file
+// before the stereo output), or that does not have the inputs up to
+// transpose, gives silence and a message. After the engine controls comes maxGrains,
 // the size of the grain pool, read once when the UGen starts.
 #pragma once
 
@@ -34,9 +36,15 @@ protected:
     static constexpr int kMaxGrains = 1024;
 
     // Gets the pool from the real-time memory and seeds the engine. The pool
-    // size is input `maxGrainsInput`. When the memory is full, the pool is
-    // null: the UGen must then call failed() and do no more.
-    explicit GrainUnit(int maxGrainsInput) {
+    // size is input `maxGrainsInput`. The unit needs `minInputs` inputs (the
+    // UGen reads them without a default). When the memory is full, or the
+    // unit does not have two outputs or enough inputs, the pool is null: the
+    // UGen must then call failed() and do no more.
+    GrainUnit(int maxGrainsInput, int minInputs) : mMinInputs(minInputs) {
+        // The class files before the stereo output made SynthDefs with one
+        // output. The engine writes two.
+        if (!usableShape())
+            return;
         const float size = input(maxGrainsInput, kDefaultGrains);
         // NaN gives the default.
         const int poolSize = std::isnan(size) ? kDefaultGrains
@@ -59,11 +67,24 @@ protected:
     }
 
     // Makes the UGen silent for good, after a failed allocation, as
-    // ClearUnitIfMemFailed of SuperCollider.
+    // ClearUnitIfMemFailed of SuperCollider, or when the unit does not have
+    // two outputs.
     void failed() {
         Unit* unit = this;
+        if (!usableShape()) {
+            Print("SuperPos: the SynthDef has a SuperPos UGen with %d outputs and %d inputs; it needs 2 outputs "
+                  "and at least %d inputs. Make the SynthDef again with the current class file.\n",
+                  static_cast<int>(numOutputs()), static_cast<int>(numInputs()), mMinInputs);
+            SETCALC(ClearUnitOutputs);
+            ClearUnitOutputs(unit, 1);
+            unit->mDone = true;
+            return;
+        }
         ClearUnitOnMemFailed
     }
+
+    // Two outputs and enough inputs.
+    bool usableShape() const { return numOutputs() == 2 && static_cast<int>(numInputs()) >= mMinInputs; }
 
     float input(int index, float otherwise) const { return numInputs() > index ? in0(index) : otherwise; }
 
@@ -77,6 +98,7 @@ protected:
     // A buffer number that is not a number, or too large for an int.
     bool badBufferNumber() const { return !(std::fabs(in0(0)) < 2.0e9f); }
 
+    int mMinInputs;
     Grain* mPool = nullptr;
     Engine mCore;
 };

@@ -12,7 +12,7 @@
 // 1 / sqrt(active grains), so that the level stays the same at all overlaps;
 // set it to 0 for the plain sum of the grains. maxGrains (1 to 1024, read
 // when the UGen starts) is the size of the grain pool: when it is full, new
-// grains are dropped.
+// grains are dropped. A grain plays for at most 10 s.
 SuperPos : MultiOutUGen {
     *ar { |bufnum = 0, pointerRate = 1, grainDur = 0.025, overlap = 5, transpose = 0,
             regularity = 0, probability = 1, texture = 1,
