@@ -1,4 +1,8 @@
 {
+  # Tailor created this file. It no longer uses Tailor's nix/ fragments
+  # (loader.nix, hooks.nix): isospin has no Tailor language enabled, and the
+  # GPU driver hook has no use here. Tailor writes nix/ again on each
+  # `tailor alter`, so .gitignore ignores it.
   description = "Development shell for isospin";
 
   inputs = {
@@ -26,15 +30,6 @@
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     in
     {
-      packages = forAllSystems (
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        pkgs.lib.optionalAttrs (builtins.pathExists ./nix/lib/blender.nix) {
-          blender-agent-bridge-extension = (import ./nix/lib/blender.nix { inherit pkgs; }).extension;
-        }
-      );
       devShells = forAllSystems (
         system:
         let
@@ -44,7 +39,6 @@
         in
         {
           default = pkgs.mkShell {
-            shellHook = import ./nix/hooks.nix { inherit pkgs; };
             packages =
               with pkgs;
               [
@@ -57,16 +51,9 @@
                 python3
                 gcc
               ]
-              ++ (if tailorPkgs ? tailor then [ tailorPkgs.tailor ] else [ ])
-              ++ import ./nix/loader.nix { inherit pkgs; };
+              ++ (if tailorPkgs ? tailor then [ tailorPkgs.tailor ] else [ ]);
           };
         }
-        //
-          pkgs.lib.optionalAttrs
-            (system == "x86_64-linux" && builtins.pathExists ./nix/shells/go-ebitengine-android.nix)
-            {
-              android = import ./nix/shells/go-ebitengine-android.nix { inherit pkgs; };
-            }
       );
     };
 }
