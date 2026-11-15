@@ -24,6 +24,8 @@
 # tests:   test programs, relative to dir, usually in its test/ folder. Each
 #          is built with the core sources and the sanitizers and must exit
 #          with 0 (scripts/check-native.py). They are not in the release.
+# notice:  optional. A sentence for NOTICE.md, for example about code that
+#          the UGen adapts from other projects and their licences.
 
 [[ugen]]
 dsp = "woodbar.dsp"
@@ -34,7 +36,12 @@ prefix = "Phys"
 name = "SuperPos"
 dir = "native/superpos"
 core = ["superpos_core.cpp"]
-plugin = ["SuperPos.cpp"]
-classes = ["SuperPos.sc"]
+plugin = ["SuperPos.cpp", "SuperPosLive.cpp"]
+classes = ["SuperPos.sc", "SuperPosLive.sc"]
 load = "SuperPos_Load"
-tests = ["test/superpos_core_test.cpp"]
+tests = ["test/superpos_core_test.cpp", "test/superpos_live_test.cpp", "test/superpos_fuzz.cpp"]
+notice = """\
+`superpos_core.cpp` adapts code from SuperCollider (Copyright (c) 2002 James \
+McCartney, GPL-2.0-or-later, used under GPL-3.0) and from Mutable Instruments \
+Clouds (Copyright 2014 Emilie Gillet, MIT). The notice at the top of that file \
+gives the details and the MIT licence text."""

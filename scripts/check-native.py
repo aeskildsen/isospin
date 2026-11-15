@@ -73,7 +73,9 @@ STOCK_INCLUDES = ["plugin_interface", "common", "server"]
 NATIVE_WARNINGS = ["-Wall", "-Wextra", "-Werror"]
 PLUGIN_WARNINGS = NATIVE_WARNINGS + ["-Wno-uninitialized", "-Wno-maybe-uninitialized"]
 
-SANITIZERS = ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+# float-cast-overflow (a float to int conversion of a value out of range, NaN
+# included) is not in GCC's "undefined" group.
+SANITIZERS = ["-fsanitize=address,undefined,float-cast-overflow", "-fno-sanitize-recover=all",
               "-fno-omit-frame-pointer", "-g", "-O1"]
 
 STOCK_LOAD = """\

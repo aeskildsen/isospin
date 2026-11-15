@@ -1,64 +1,64 @@
 // Copyright (C) 2026 Anders Eskildsen
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The SuperPos UGen: overlapping grains from a mono buffer. This file is the
+// The SuperPos UGen: overlapping grains from a mono buffer, in two channels. This file is the
 // SuperCollider wrapper; the DSP is in superpos_core.cpp.
 //
 // Inputs (all read once in each block):
 //   0 bufnum       the buffer (one channel)
 //   1 pointerRate  the speed of the read pointer, 1 = the speed of the buffer
-//   2 grainDur     the grain duration in seconds
+//   2 grainDur     the grain duration in seconds (a grain plays for at most
+//                  10 s)
 //   3 overlap      grains at the same time, on average
 //   4 transpose    semitones
-#include <SC_PlugIn.hpp>
+//   5 regularity   0 = a fixed grain interval, 1 = random intervals
+//   6 probability  the chance that a trigger starts a grain
+//   7 texture      the window shape: 0 = a steep trapezoid, 0.5 = a triangle,
+//                  1 = a Hann window; read when a grain starts
+//   8 detuneStep   each grain is detuned by a random value in +-detuneStep
+//                  semitones
+//   9 scatter      each grain starts a random time in [0, scatter) seconds
+//                  after the pointer
+//  10 pan          -1 = left, 1 = right
+//  11 stereoSpread each grain pans to a random value in pan +- stereoSpread
+//  12 normalize    1 = scale the output by 1 / sqrt(active grains), 0 = off
+//  13 maxGrains    the size of the grain pool (1 to 1024), read once when the
+//                  UGen starts; when it is full, new grains are dropped
+//
+// Outputs: 0 left, 1 right.
+//
+// A SynthDef with fewer inputs gets the default value of each missing input.
+// A SynthDef with a SuperPos unit that does not have two outputs (from the
+// class file before the stereo output) gives silence and a message.
+#include "superpos_unit.h"
 
-#include <cmath>
-
-#include <isospin/sc_plugin_table.h>
-
-#include "superpos_core.h"
+// Registers SuperPosLive (SuperPosLive.cpp).
+void SuperPosLive_Register(InterfaceTable* inTable);
 
 namespace {
 
-// The size of the grain pool.
-constexpr int kMaxGrains = 64;
-
-class SuperPos : public SCUnit {
+class SuperPos : public superpos::GrainUnit<superpos::Core> {
 public:
-    SuperPos() {
-        SuperPos* unit = this;
-        m_fbufnum = -1e9f;
-        m_buf = nullptr;
-        mPool = static_cast<superpos::Grain*>(RTAlloc(mWorld, kMaxGrains * sizeof(superpos::Grain)));
-        ClearUnitIfMemFailed(mPool);
-
-        mCore.init(mPool, kMaxGrains, sampleRate(), bufferSize());
+    // Inputs 0 to 4 have no default: every class file had them.
+    SuperPos() : GrainUnit(13, 5) {
+        if (!mPool) {
+            failed();
+            return;
+        }
         mCalcFunc = make_calc_function<SuperPos, &SuperPos::next>();
-
         // The first output sample, as the UGens that the core copies make it
-        // in their constructors (see superpos::Core::prime).
+        // in their constructors (see superpos::Engine::prime).
         run<true>(1);
     }
 
-    ~SuperPos() {
-        if (mPool)
-            RTFree(mWorld, mPool);
-    }
-
-    // The buffer macros of SuperCollider read these two fields.
-    float m_fbufnum;
-    SndBuf* m_buf;
-
 private:
-    superpos::Controls controls() const { return { in0(1), in0(2), in0(3), in0(4) }; }
-
     void next(int numSamples) { run<false>(numSamples); }
 
     template <bool Prime> void run(int numSamples) {
         SuperPos* unit = this;
         // A buffer number that is not a number, or too large for an int,
         // gives silence.
-        if (!(std::fabs(in0(0)) < 2.0e9f)) {
+        if (badBufferNumber()) {
             ClearUnitOutputs(unit, numSamples);
             return;
         }
@@ -66,14 +66,12 @@ private:
         // block.
         GET_BUF_SHARED
         const superpos::BufferView view { bufData, bufFrames, bufChannels, buf->samplerate };
+        mCore.source().setPointerRate(in0(1));
         if (Prime)
-            mCore.prime(view, controls(), out(0));
+            mCore.prime(view, controls(2), out(0), out(1));
         else
-            mCore.process(view, controls(), out(0), numSamples);
+            mCore.process(view, controls(2), out(0), out(1), numSamples);
     }
-
-    superpos::Grain* mPool = nullptr;
-    superpos::Core mCore;
 };
 
 } // namespace
@@ -81,4 +79,5 @@ private:
 void SuperPos_Load(InterfaceTable* inTable) {
     ISOSPIN_KEEP_TABLE(inTable);
     registerUnit<SuperPos>(inTable, "SuperPos");
+    SuperPosLive_Register(inTable);
 }
