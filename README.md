@@ -50,7 +50,7 @@ A UGen can also be hand-written C++ (a `[[native]]` table in `supercollider.toml
 
 ### Build checks
 
-`scripts/check-native.py` makes a development build and compiles every UGen source two ways: against stock SuperCollider headers (linked into a loadable scsynth plugin) and against SuperSonic's headers with the defines of its engine. Then it runs the tests of the hand-written UGens with AddressSanitizer and UndefinedBehaviorSanitizer (with `float-cast-overflow`). SuperPos has a fuzz test among them, `native/superpos/test/superpos_fuzz.cpp`; the checks run it with 10⁶ parameter sets and seed 1, and `superpos_fuzz <sets> <seed>` gives a longer run. By default it uses `tests/fixtures/supercollider.toml`, which has a hand-written test UGen next to woodbar; `--manifest supercollider.toml` checks the release list.
+`scripts/check-native.py` makes a development build and compiles every UGen source two ways: against stock SuperCollider headers (linked into a loadable scsynth plugin) and against SuperSonic's headers with the defines of its engine. Then it runs the tests of the hand-written UGens with AddressSanitizer and UndefinedBehaviorSanitizer (with `float-cast-overflow`). SuperPos has a fuzz test among them, `native/superpos/test/superpos_fuzz.cpp`; the checks run it with 10⁵ parameter sets and seed 1, and `superpos_fuzz <sets> <seed>` gives a longer run. By default it uses `tests/fixtures/supercollider.toml`, which has a hand-written test UGen next to woodbar; `--manifest supercollider.toml` checks the release list.
 
 ```sh
 python3 -I scripts/check-native.py \
