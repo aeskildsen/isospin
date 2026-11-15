@@ -10,7 +10,7 @@ This repository holds the DSP sources and the scripts that make host code from t
 |---|---|
 | `woodbar.dsp` | A struck wooden bar: claves, wood stick, xylophone or marimba bar. Modal bar with the wood damping law and a Hertz-timed mallet. |
 | `wood.lib` | Shared parts for the wooden instruments: damping law, mallet strike, noise modes. |
-| `native/superpos/` | SuperPos, a granular UGen in hand-written C++: overlapping grains from a mono buffer, started at a moving read pointer, with random grain times (`regularity`, `probability`), a window shape (`texture`) and a level control by `1/√n` (`normalize`) as in Mutable Instruments Clouds, and with per-grain detune, scatter and pan in stereo. With `normalize` 0 and the other controls at their defaults, its output is the same as a graph of SuperCollider's `Impulse`, `Phasor` and two-channel `GrainBuf` (see `superpos_core.h`). SuperPosLive uses the same grain engine on a circular record buffer: it records its input (any signal: a bus, a UGen, a device input), with freeze, and its grains never read across the record head. Work in progress. |
+| `native/superpos/` | SuperPos, a granular UGen in hand-written C++: overlapping grains from a mono buffer, started at a moving read pointer, with random grain times (`regularity`, `probability`), a window shape (`texture`) and a level control by `1/√n` (`normalize`) as in Mutable Instruments Clouds, and with per-grain detune, scatter and pan in stereo. With `normalize` 0 and the other controls at their defaults, its output is the same as a graph of SuperCollider's `Impulse`, `Phasor` and two-channel `GrainBuf` (see `superpos_core.h`). SuperPosLive uses the same grain engine on a circular record buffer: it records its input (any signal: a bus, a UGen, a device input), with freeze, and its grains never read across the record head. See [`native/superpos/README.md`](native/superpos/README.md). |
 
 ## Try it
 
@@ -56,7 +56,7 @@ python3 -I scripts/check-native.py \
     --supersonic <SuperSonic source>
 ```
 
-The workflow `.github/workflows/check.yml` runs it for both lists on each pull request, with the headers of SuperCollider 3.14.1 and SuperSonic v0.95.1. Needs a C++17 compiler with the sanitizers (GCC from the same nixpkgs in CI).
+The workflow `.github/workflows/check.yml` runs it for both lists on each pull request, with the headers of SuperCollider 3.14.1 and SuperSonic v0.97.0. Needs a C++17 compiler with the sanitizers (GCC from the same nixpkgs in CI).
 
 ## Licence
 
