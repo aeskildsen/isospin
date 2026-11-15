@@ -27,9 +27,9 @@ env:
   # SuperCollider Version-3.14.1.
   SC_REPO: https://github.com/supercollider/supercollider.git
   SC_COMMIT: 426edf6d8742e1cc3bd85b51ca0c4e595d37a903
-  # SuperSonic v0.95.1.
+  # SuperSonic v0.97.0.
   SUPERSONIC_REPO: https://github.com/samaaron/supersonic.git
-  SUPERSONIC_COMMIT: f395a0f24c43419b7019718f88807bd3a3b71ddb
+  SUPERSONIC_COMMIT: 590f8a276229679e7007caea4d935228da7468b4
 
 jobs:
   check:
