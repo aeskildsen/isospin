@@ -1,0 +1,3 @@
+[submodule "external/md2misc"]
+	path = external/md2misc
+	url = https://github.com/aeskildsen/md2misc.git

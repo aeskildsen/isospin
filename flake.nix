@@ -47,6 +47,8 @@
                 just
                 # The isospin build: Faust, Python for the scripts (standard
                 # library only), and a C++ compiler for scripts/check-native.py.
+                # The scripts import md2misc from the external/md2misc
+                # submodule. md2misc also needs only the standard library.
                 faust
                 python3
                 gcc
