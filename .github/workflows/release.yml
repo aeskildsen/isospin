@@ -29,6 +29,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # md2misc in external/md2misc makes the help pages.
+          submodules: true
 
       - uses: cachix/install-nix-action@v31
 

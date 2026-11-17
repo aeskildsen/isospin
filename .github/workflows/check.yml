@@ -4,7 +4,8 @@
 # (tests/fixtures/supercollider.toml, which has a hand-written test UGen):
 # compile every source against stock SuperCollider headers and against
 # SuperSonic's headers, link each set, and run the tests of the hand-written
-# UGens with AddressSanitizer and UndefinedBehaviorSanitizer.
+# UGens with AddressSanitizer and UndefinedBehaviorSanitizer. Then render the
+# help pages with SCDoc and compile their examples (scripts/check-help.py).
 #
 # The tools come from the same pinned nixpkgs as the release. The headers come
 # from pinned commits. Change a pin only on purpose; keep SUPERSONIC at the
@@ -36,6 +37,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # md2misc in external/md2misc makes the help pages.
+          submodules: true
 
       - uses: cachix/install-nix-action@v31
 
@@ -63,3 +67,8 @@ jobs:
             python3 -I scripts/check-native.py \
               --sc-include "$RUNNER_TEMP/supercollider/include" \
               --supersonic "$RUNNER_TEMP/supersonic"
+
+      - name: Check the help pages
+        run: |
+          nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" "$NIXPKGS#supercollider" --command \
+            python3 -I scripts/check-help.py --require-sclang

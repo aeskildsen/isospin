@@ -5,6 +5,6 @@ import 'just/loader.just'
 default:
     @just --list
 
-# Fast check: the release UGens without the fuzz test, against the CI commits of SuperCollider and SuperSonic
+# Fast check: the release UGens without the fuzz test, against the CI commits of SuperCollider and SuperSonic, and the help pages
 check:
     bash just/project/check.sh
