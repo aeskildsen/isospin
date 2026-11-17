@@ -13,7 +13,7 @@ folder gets:
     src/<class>.cpp         the Faust UGen sources
     src/<name>/...          the sources and headers of each hand-written UGen
     classes/<unit>.sc       the SuperCollider class files, for sclang
-    help/<unit>.schelp      the help pages of the Faust UGens, for sclang
+    help/<unit>.schelp      the help pages, for sclang
     include/faust/...       the Faust headers that the sources include
     include/isospin/...     the isospin header for hand-written UGens (only
                             when there is one)
@@ -38,6 +38,10 @@ Faust source (woodbar.md for woodbar.dsp). md2misc converts it to schelp. The
 build writes the CLASSMETHODS:: section from the Faust description: one
 argument for each control, with its tooltip and range. The Markdown file
 marks the place of this section with a line <!-- md2misc: classmethods -->.
+The help page of a hand-written UGen comes from the Markdown file next to
+each class file (SuperPos.md for SuperPos.sc), with its own class methods
+section. The build stops if the methods and arguments of a help page are not
+those of the class file, in the same order.
 
 Needs faust on PATH (the Faust version is in BUILDINFO) and the md2misc
 submodule in external/md2misc (git submodule update --init).
@@ -48,12 +52,14 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
+from itertools import zip_longest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -111,6 +117,12 @@ def help_source(ugen: dict) -> Path:
     return (ROOT / ugen["dsp"]).with_suffix(".md")
 
 
+def native_help_sources(native: dict) -> list[Path]:
+    """The Markdown files of the help pages of a hand-written UGen: each
+    class file with the suffix .md."""
+    return [(ROOT / native["dir"] / rel).with_suffix(".md") for rel in native["classes"]]
+
+
 def run(*args: str) -> str:
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
@@ -154,6 +166,11 @@ def read_manifest(path: Path) -> tuple[list[dict], list[dict]]:
             for rel in native[key]:
                 if not (folder / rel).is_file():
                     sys.exit(f"{path.name}: [[native]] {name}: no file {native['dir']}/{rel}")
+        for source in native_help_sources(native):
+            if not source.is_file():
+                sys.exit(f"{path.name}: [[native]] {name}: no help page "
+                         f"{source.relative_to(ROOT)}; write it in Markdown next to the "
+                         "class file")
         for rel in native["core"] + native["plugin"]:
             if Path(rel).parts[0] == "test":
                 sys.exit(f"{path.name}: [[native]] {name}: {rel}: the test/ folder is for tests only")
@@ -374,20 +391,86 @@ def classmethods_section(info: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def help_page(md2misc, ugen: dict, info: dict) -> str:
-    """The help page of a Faust UGen: its Markdown file, with the class name
-    and the CLASSMETHODS:: section from the Faust description."""
-    source = help_source(ugen)
+def help_page(md2misc, source: Path, unit: str, class_text: str,
+              insertions: dict | None = None) -> str:
+    """The help page of the class `unit` from its Markdown file. The
+    arguments of the page must be those of the class file (see
+    check_help_arguments)."""
     name = source.relative_to(ROOT).as_posix()
     try:
-        return md2misc.convert_schelp(
-            source.read_text(),
-            metadata={"class": unit_name(info, ugen["prefix"])},
-            insertions={"classmethods": classmethods_section(info)})
+        page = md2misc.convert_schelp(source.read_text(), metadata={"class": unit},
+                                      insertions=insertions)
     except md2misc.UnsupportedConstruct as error:
         sys.exit(f"build-sc-static: {error.describe(name)}")
     except md2misc.Md2miscError as error:
         sys.exit(f"build-sc-static: {name}: {error}")
+    problem = check_help_arguments(page, class_methods(class_text))
+    if problem:
+        sys.exit(f"build-sc-static: {name}: {problem}")
+    return page
+
+
+def split_arguments(text: str) -> list[str]:
+    """The arguments of an argument list, split at the commas that are not
+    in brackets (a default value can be an array)."""
+    parts, depth, start = [], 0, 0
+    for i, char in enumerate(text):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return [part.strip() for part in parts if part.strip()]
+
+
+def class_methods(text: str) -> dict[str, list[str]]:
+    """The class methods (*name) of a SuperCollider class file and the
+    names of their arguments, in order. The arguments are in |...| or after
+    `arg` at the start of the method. Comments are not read."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    methods = {}
+    for method in re.finditer(r"\*([a-z]\w*)\s*\{\s*", text):
+        rest = text[method.end():]
+        if rest.startswith("|"):
+            depth, end = 0, 1
+            while end < len(rest) and not (rest[end] == "|" and depth == 0):
+                depth += (rest[end] in "([{") - (rest[end] in ")]}")
+                end += 1
+            arguments = rest[1:end]
+        elif re.match(r"arg\b", rest):
+            arguments = rest[3:rest.find(";")]
+        else:
+            arguments = ""
+        methods[method[1]] = [re.match(r"(?:\.\.\.\s*)?(\w+)", argument)[1]
+                              for argument in split_arguments(arguments)]
+    return methods
+
+
+def check_help_arguments(page: str, methods: dict[str, list[str]]) -> str | None:
+    """A problem, or None: each METHOD:: entry of the page must name class
+    methods of the class file, its ARGUMENT:: entries must be the arguments
+    of each of them, in the same order, and each class method of the class
+    file must have an entry."""
+    documented = set()
+    for entry in re.split(r"^METHOD::", page, flags=re.M)[1:]:
+        names = [name.strip() for name in entry.split("\n", 1)[0].split(",")]
+        arguments = re.findall(r"^ARGUMENT::(\w+)", entry, re.M)
+        for name in names:
+            if name not in methods:
+                return f"the class file has no class method *{name}"
+            for number, (wanted, found) in enumerate(zip_longest(methods[name], arguments), 1):
+                if wanted != found:
+                    return (f"argument {number} of *{name} is {wanted or 'not there'} in the "
+                            f"class file, but {found or 'not there'} in the help page")
+            documented.add(name)
+    missing = sorted(set(methods) - documented)
+    if missing:
+        return f"no help for the class method *{missing[0]} of the class file"
+    return None
 
 
 NOTICE = """\
@@ -451,7 +534,8 @@ def generate(dest: Path, label: str, kind: str, manifest: Path) -> None:
             out.write_text(text)
             out = dest / "help" / f"{unit}.schelp"
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(help_page(md2misc, u, info))
+            out.write_text(help_page(md2misc, help_source(u), unit, text,
+                                     {"classmethods": classmethods_section(info)}))
 
     for header in FAUST_HEADERS:
         out = dest / "include" / header
@@ -469,6 +553,11 @@ def generate(dest: Path, label: str, kind: str, manifest: Path) -> None:
                 sys.exit(f"build-sc-static: two UGens have the class file {out.name}")
             out.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / n["dir"] / rel, out)
+            unit = Path(rel).stem
+            source = (ROOT / n["dir"] / rel).with_suffix(".md")
+            out = dest / "help" / f"{unit}.schelp"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(help_page(md2misc, source, unit, (ROOT / n["dir"] / rel).read_text()))
     if natives:
         for header in NATIVE_HEADERS:
             out = dest / "include" / header
