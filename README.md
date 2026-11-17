@@ -24,7 +24,9 @@ You can also paste `woodbar.dsp` and `wood.lib` into the [Faust IDE](https://fau
 
 ## Static SuperCollider UGens
 
-`scripts/build-sc-static.py` makes C++ sources for UGens that are linked into the server binary, as [SuperSonic](https://github.com/samaaron/supersonic) needs (it cannot load plugins at run time). `supercollider.toml` lists the UGens. For each UGen the script runs Faust with the `supercollider.cpp` architecture and then `scripts/faust-static-ugen.py`, which gives each UGen its own names and a `<Class>_Load` function. The output also has the Faust headers, a CMake file with the source list and build settings (`isospin.cmake`) and a header with `Isospin_Load()` (`isospin_sc_static.h`). For sclang, the output has the class file of each UGen (`classes/<Unit>.sc`, for example `classes/PhysWoodbar.sc`). The script makes it from the Faust JSON description, with the same arguments and defaults as `faust2sc.py`. There are no help files yet.
+`scripts/build-sc-static.py` makes C++ sources for UGens that are linked into the server binary, as [SuperSonic](https://github.com/samaaron/supersonic) needs (it cannot load plugins at run time). `supercollider.toml` lists the UGens. For each UGen the script runs Faust with the `supercollider.cpp` architecture and then `scripts/faust-static-ugen.py`, which gives each UGen its own names and a `<Class>_Load` function. The output also has the Faust headers, a CMake file with the source list and build settings (`isospin.cmake`) and a header with `Isospin_Load()` (`isospin_sc_static.h`). For sclang, the output has the class file of each UGen (`classes/<Unit>.sc`, for example `classes/PhysWoodbar.sc`). The script makes it from the Faust JSON description, with the same arguments and defaults as `faust2sc.py`.
+
+The output also has a help page for each UGen (`help/<Unit>.schelp`). [md2misc](https://github.com/aeskildsen/md2misc) makes it from the Markdown file next to the UGen source: `woodbar.md`, `native/superpos/SuperPos.md`. For a Faust UGen, the build adds the arguments from the tooltips and ranges of the controls. The build stops if a page is missing, or if its arguments are not those of the class file.
 
 Development build into a folder (writes only the files that changed):
 
@@ -42,6 +44,8 @@ Push a tag `v<version>` to release. The workflow `.github/workflows/release.yml`
 
 Needs Faust (the releases use 2.85.9) and Python 3.11 or later.
 
+md2misc is a git submodule in `external/md2misc`. Clone with `git clone --recurse-submodules`, or run `git submodule update --init`. md2misc is GPL-3.0; it is a build tool and is not in the release.
+
 With Nix, `flake.nix` gives a shell with the same Faust, Python and C++ compiler as CI (the same pinned nixpkgs), and `just`. Run `nix develop`, or `nix develop -c <command>` for one command. With direnv and nix-direnv, run `direnv allow` once; the shell then loads when you go into the folder.
 
 ### Hand-written C++ UGens
@@ -58,7 +62,9 @@ python3 -I scripts/check-native.py \
     --supersonic <SuperSonic source>
 ```
 
-The workflow `.github/workflows/check.yml` runs it for both lists on each pull request, with the headers of SuperCollider 3.14.1 and SuperSonic v0.97.0. Needs a C++17 compiler with the sanitizers (GCC from the same nixpkgs in CI).
+`scripts/check-help.py` renders each help page with SCDoc (SuperCollider 3.14 or later) and compiles the code of the page. Without `sclang` it is skipped.
+
+The workflow `.github/workflows/check.yml` runs both checks on each pull request (`check-native.py` for both lists), with the headers of SuperCollider 3.14.1 and SuperSonic v0.97.0. Needs a C++17 compiler with the sanitizers (GCC from the same nixpkgs in CI).
 
 ## Licence
 

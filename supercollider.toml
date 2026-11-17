@@ -31,6 +31,12 @@
 #          with 0 (scripts/check-native.py). They are not in the release.
 # notice:  optional. A sentence for NOTICE.md, for example about code that
 #          the UGen adapts from other projects and their licences.
+#
+# The help page of each class is the Markdown file next to its class file
+# (SuperPos.md for SuperPos.sc); the build stops if it is missing. Its
+# "## Class methods" section has a "### *ar" heading for each class method
+# and an argument table with the arguments of the class file, in the same
+# order; the build stops if they differ.
 
 [[ugen]]
 dsp = "woodbar.dsp"
