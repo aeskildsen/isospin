@@ -20,7 +20,8 @@
 //   opposite phase at the two ends, and spread sets how much of this the
 //   stereo output keeps.
 //
-// The argument texts are the tooltips below.
+// The help page is woodbar.md. The build adds the arguments to it: the
+// argument texts are the tooltips below, with the ranges of the sliders.
 //
 // Copyright (C) 2026 Anders Eskildsen
 // SPDX-License-Identifier: AGPL-3.0-or-later

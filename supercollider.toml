@@ -9,6 +9,11 @@
 # prefix: SC_FAUST_PREFIX. Faust puts it before the capitalised Faust name:
 #         with prefix "Phys", the Faust name "woodbar" becomes PhysWoodbar.
 #
+# The help page of a Faust UGen is the Markdown file next to its Faust source
+# (woodbar.md for woodbar.dsp); the build stops if it is missing. The build
+# writes the class methods from the Faust description: each control needs a
+# [tooltip:...], which is its argument text.
+#
 # A hand-written C++ UGen: one [[native]] table. The release gets its sources
 # and the headers of its folder in src/<name>/, without change. See
 # native/include/isospin/sc_plugin_table.h for the rules of the wrapper
