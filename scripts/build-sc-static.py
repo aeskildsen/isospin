@@ -13,6 +13,7 @@ folder gets:
     src/<class>.cpp         the Faust UGen sources
     src/<name>/...          the sources and headers of each hand-written UGen
     classes/<unit>.sc       the SuperCollider class files, for sclang
+    help/<unit>.schelp      the help pages of the Faust UGens, for sclang
     include/faust/...       the Faust headers that the sources include
     include/isospin/...     the isospin header for hand-written UGens (only
                             when there is one)
@@ -32,7 +33,14 @@ Usage:
         isospin-sc-static-VERSION.tar.gz and its .sha256 file into DIR. The
         same commit and the same Faust version give the same bytes.
 
-Needs faust on PATH (the Faust version is in BUILDINFO).
+The help page of a Faust UGen comes from the Markdown file next to its
+Faust source (woodbar.md for woodbar.dsp). md2misc converts it to schelp. The
+build writes the CLASSMETHODS:: section from the Faust description: one
+argument for each control, with its tooltip and range. The Markdown file
+marks the place of this section with a line <!-- md2misc: classmethods -->.
+
+Needs faust on PATH (the Faust version is in BUILDINFO) and the md2misc
+submodule in external/md2misc (git submodule update --init).
 """
 import argparse
 import gzip
@@ -83,6 +91,26 @@ def load_rewrite():
     return module
 
 
+def load_md2misc():
+    # Import md2misc from the submodule. It needs only the standard library,
+    # so python -I is sufficient.
+    # Write no __pycache__ folder: it would make the submodule unclean.
+    sys.dont_write_bytecode = True
+    path = ROOT / "external" / "md2misc"
+    if not (path / "md2misc" / "__init__.py").is_file():
+        sys.exit("build-sc-static: external/md2misc is empty; "
+                 "run git submodule update --init")
+    sys.path.insert(0, str(path))
+    import md2misc
+    return md2misc
+
+
+def help_source(ugen: dict) -> Path:
+    """The Markdown file of the help page of a Faust UGen: the Faust source
+    with the suffix .md."""
+    return (ROOT / ugen["dsp"]).with_suffix(".md")
+
+
 def run(*args: str) -> str:
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
@@ -102,6 +130,11 @@ def read_manifest(path: Path) -> tuple[list[dict], list[dict]]:
         for key in ("dsp", "class", "prefix"):
             if not isinstance(ugen.get(key), str) or not ugen[key]:
                 sys.exit(f"{path.name}: each [[ugen]] needs a {key} string")
+        source = help_source(ugen)
+        if not source.is_file():
+            sys.exit(f"{path.name}: [[ugen]] {ugen['dsp']}: no help page "
+                     f"{source.relative_to(ROOT)}; write it in Markdown next to the "
+                     "Faust source")
     names = [u["class"] for u in ugens]
     for native in natives:
         for key in ("name", "dir", "load"):
@@ -232,19 +265,28 @@ def sc_argument(label: str) -> str:
     return label.lower().replace(" ", "_")
 
 
-def class_file(info: dict, prefix: str) -> tuple[str, str]:
-    """The unit name and the SuperCollider class file for one UGen, from the
-    Faust JSON description. The class arguments are the audio inputs
-    (in0, in1, ...) and then the controls, in the order of the JSON file.
-    This is the order in which the UGen reads its inputs."""
-    unit = (prefix + normalize_name(info["name"]))[:30]
+def faust_controls(info: dict) -> list[dict]:
+    """The controls of a UGen from the Faust JSON description, in the order
+    of the JSON file. This is the order in which the UGen reads its inputs."""
     (group,) = info["ui"]
-    controls = []
     for item in group["items"]:
         if "items" in item:
             sys.exit(f"{info['name']}: a UI group in a group is not supported; "
                      "make the controls of the top group flat")
-        controls.append((sc_argument(item["label"]), sc_number(item.get("init", 0))))
+    return group["items"]
+
+
+def unit_name(info: dict, prefix: str) -> str:
+    return (prefix + normalize_name(info["name"]))[:30]
+
+
+def class_file(info: dict, prefix: str) -> tuple[str, str]:
+    """The unit name and the SuperCollider class file for one UGen, from the
+    Faust JSON description. The class arguments are the audio inputs
+    (in0, in1, ...) and then the controls (see faust_controls)."""
+    unit = unit_name(info, prefix)
+    controls = [(sc_argument(item["label"]), sc_number(item.get("init", 0)))
+                for item in faust_controls(info)]
     inputs = [f"in{i}" for i in range(info["inputs"])]
     names = ", ".join(inputs + [name for name, _ in controls])
     args = ", ".join(inputs + [f"{name}({default})" for name, default in controls])
@@ -293,6 +335,61 @@ def class_file(info: dict, prefix: str) -> tuple[str, str]:
     return unit, "\n".join(lines) + "\n"
 
 
+def schelp_text(text: str) -> str:
+    """Text for a schelp document: "::", "##" and "||" are markup in SCDoc
+    and get a backslash."""
+    for mark in ("::", "##", "||"):
+        text = text.replace(mark, "\\" + mark)
+    return text
+
+
+def tooltip(item: dict) -> str:
+    for entry in item.get("meta", []):
+        if "tooltip" in entry:
+            return entry["tooltip"].strip()
+    return ""
+
+
+def classmethods_section(info: dict) -> str:
+    """The CLASSMETHODS:: section of the help page of a UGen, from the Faust
+    JSON description: the methods ar and kr, one argument for each audio
+    input and control (with the names of class_file), and the outputs. The
+    text of a control is its tooltip and its range. A button and a checkbox
+    have no range: their values are 0 and 1."""
+    lines = ["CLASSMETHODS::", "METHOD::ar, kr", ""]
+    for i in range(info["inputs"]):
+        lines += [f"ARGUMENT::in{i}", f"Audio input {i}.", ""]
+    for item in faust_controls(info):
+        name = sc_argument(item["label"])
+        text = tooltip(item)
+        if not text:
+            sys.exit(f"{info['filename']}: the control {item['label']} has no tooltip; "
+                     "its tooltip is the argument text of the help page")
+        lines += [f"ARGUMENT::{name}", schelp_text(text)]
+        if item["type"] not in ("button", "checkbox"):
+            lines += [f"Range {sc_number(item['min'])} to {sc_number(item['max'])}."]
+        lines += [""]
+    outputs = info["outputs"]
+    lines += ["returns::" + ("One channel." if outputs == 1 else f"An array of {outputs} channels.")]
+    return "\n".join(lines) + "\n"
+
+
+def help_page(md2misc, ugen: dict, info: dict) -> str:
+    """The help page of a Faust UGen: its Markdown file, with the class name
+    and the CLASSMETHODS:: section from the Faust description."""
+    source = help_source(ugen)
+    name = source.relative_to(ROOT).as_posix()
+    try:
+        return md2misc.convert_schelp(
+            source.read_text(),
+            metadata={"class": unit_name(info, ugen["prefix"])},
+            insertions={"classmethods": classmethods_section(info)})
+    except md2misc.UnsupportedConstruct as error:
+        sys.exit(f"build-sc-static: {error.describe(name)}")
+    except md2misc.Md2miscError as error:
+        sys.exit(f"build-sc-static: {name}: {error}")
+
+
 NOTICE = """\
 # isospin: static SuperCollider UGen sources
 
@@ -329,6 +426,7 @@ NATIVE_NOTICE = """\
 def generate(dest: Path, label: str, kind: str, manifest: Path) -> None:
     """Writes the full output into dest, which must be empty."""
     rewrite = load_rewrite()
+    md2misc = load_md2misc()
     ugens, natives = read_manifest(manifest)
     include_dir = Path(run("faust", "--includedir").strip())
     faust_version = run("faust", "--version").splitlines()[0].strip()
@@ -351,6 +449,9 @@ def generate(dest: Path, label: str, kind: str, manifest: Path) -> None:
             out = dest / "classes" / f"{unit}.sc"
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text)
+            out = dest / "help" / f"{unit}.schelp"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(help_page(md2misc, u, info))
 
     for header in FAUST_HEADERS:
         out = dest / "include" / header
