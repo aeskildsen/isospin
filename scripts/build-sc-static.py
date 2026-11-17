@@ -579,7 +579,8 @@ def generate(dest: Path, label: str, kind: str, manifest: Path) -> None:
                     f"load function `{n['load']}`")
         if n["notice"]:
             listing += f". {n['notice'].strip()}"
-    listing += "\n\nThe SuperCollider class files are in `classes/`."
+    listing += ("\n\nThe SuperCollider class files are in `classes/`, and their help pages in "
+                "`help/`.")
     notice = NOTICE.format(generated=GENERATED, label=label, ugens=listing)
     if natives:
         notice += NATIVE_NOTICE
