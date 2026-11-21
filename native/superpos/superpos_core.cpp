@@ -303,8 +303,10 @@ double FileSource::place(const BufferView& buf, bool scattered, double scatterFr
     // `.wrap(0, 1)` in the SynthDef that the controls come from.
     if (scattered)
         pos = static_cast<float>(wrap((mGrainPointer + scatterFrames) / buf.frames, 0., 1.));
-    // The product is in float, as GrainBuf computes it.
-    return pos * buf.frames;
+    // The product is in float, as GrainBuf computes it. It cannot overflow,
+    // because pos is in [0, 1].
+    const float phase = pos * static_cast<float>(buf.frames);
+    return phase;
 }
 
 void LiveSource::setInput(const float* in, int inStep, float* data, float freeze, float position) {
@@ -590,7 +592,10 @@ void Engine<Source>::startGrain(const BufferView& buf, const Controls& c, float*
     float ratio = midiRatio(c.transpose);
     if (start.detune != 0.f)
         ratio *= midiRatio(start.detune);
-    const double rate = ratio * bufRateScale;
+    // The product is in float, as GrainBuf computes it. If it overflows, it
+    // is infinite, and the check below drops the grain.
+    const float rate32 = ratio * bufRateScale;
+    const double rate = rate32;
     double counter = c.grainDur * mSampleRate;
     counter = std::max(4., counter);
     counter = std::min(mMaxGrainSamples, counter);
