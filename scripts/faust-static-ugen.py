@@ -70,6 +70,19 @@ def convert(name: str, source: str) -> str:
         source,
     )
 
+    # The architecture defines the soundfile folder functions without
+    # `static`. With two or more Faust UGens in one link, their definitions
+    # collide. Make them local to the file.
+    source, count = re.subn(
+        r"^std::string (defaultSoundfilesDirectory1?|defaultUserAppSupportDirectory)\(\)$",
+        r"static std::string \1()",
+        source,
+        flags=re.MULTILINE,
+    )
+    if count != 5:
+        sys.exit(f"expected 5 soundfile folder functions (with the macOS variants), "
+                 f"found {count}: the architecture file changed")
+
     for leftover in ("api_version", "server_type"):
         if re.search(rf"\b{leftover}\b", source):
             sys.exit(f"{leftover} is still in the output: the architecture file changed")
