@@ -1,0 +1,141 @@
+# Builds the loadable SuperCollider plugin of isospin for Linux, macOS and
+# Windows (scripts/build-sc-plugin.py), from one set of static sources.
+#
+# check.yml calls it for a development build, and release.yml for a release
+# (input release-tag). The artifacts:
+#
+#   <name>-sc-static       the static sources: a development build folder, or
+#                          the release tarball and its .sha256
+#   <name>-sc-plugin-<p>   isospin-sc-<version>-<p>.zip for each platform <p>
+#
+# <name> is the release tag, or "dev". Thus a release run, which also runs
+# check.yml, has no two artifacts with the same name.
+#
+# The Linux and macOS plugins are also loaded and rendered by scsynth and
+# supernova (scripts/check-sc-plugin.py). The Windows plugin is built only.
+name: SuperCollider plugin
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: The version tag (v1.2.3) of a release; empty for a development build.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # nixpkgs with Faust 2.85.9 and SuperCollider 3.14.1 (the same as check.yml
+  # and flake.nix). release.yml makes the release tarball with this Faust.
+  NIXPKGS: github:NixOS/nixpkgs/7fd4004d0511991fff3a0524856a9be09e28c5f0
+  NAME: ${{ inputs.release-tag || 'dev' }}
+
+jobs:
+  sources:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # md2misc in external/md2misc makes the help pages.
+          submodules: true
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Build the static sources
+        env:
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          if [ -n "$TAG" ]; then
+            nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" --command \
+              python3 -I scripts/build-sc-static.py --release "${TAG#v}" --tarball static
+            cat static/*.sha256
+          else
+            nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" --command \
+              python3 -I scripts/build-sc-static.py --out static
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}-sc-static
+          path: static/
+          if-no-files-found: error
+
+  plugin:
+    needs: sources
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Ubuntu runner: the plugin then needs glibc
+          # 2.35 or later, not the glibc of a newer system.
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          # One universal binary for arm64 and x86_64. GitHub retires the
+          # older macOS images; the deployment target (11.0) sets the oldest
+          # macOS that the plugin runs on, not the runner.
+          - os: macos-latest
+            platform: macos-universal
+          - os: windows-2022
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.NAME }}-sc-static
+          path: static
+
+      # The SuperCollider commit is the one of check.yml, so that the plugin
+      # and the checks use the same headers.
+      - name: Get the SuperCollider headers
+        run: |
+          pin() { sed -n "s/^ *$1: *//p" .github/workflows/check.yml | head -n 1; }
+          git init -q "$RUNNER_TEMP/supercollider"
+          git -C "$RUNNER_TEMP/supercollider" fetch -q --depth 1 "$(pin SC_REPO)" "$(pin SC_COMMIT)"
+          git -C "$RUNNER_TEMP/supercollider" checkout -q FETCH_HEAD
+
+      - name: Build the plugin
+        run: |
+          # A release has the tarball; a development build is the folder.
+          static=$(ls static/*.tar.gz 2>/dev/null || echo static)
+          python -I scripts/build-sc-plugin.py \
+            --static "$static" \
+            --sc-include "$RUNNER_TEMP/supercollider/include" \
+            --platform "${{ matrix.platform }}" \
+            --zip dist
+
+      # The plugin of the Ubuntu 22.04 runner, in the SuperCollider 3.14.1 of
+      # the pinned nixpkgs (a newer glibc, as on a newer system).
+      - uses: cachix/install-nix-action@v31
+        if: runner.os == 'Linux'
+      - name: Load and render (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          nix shell "$NIXPKGS#supercollider" --command \
+            python -I scripts/check-sc-plugin.py
+
+      - name: Load and render (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --cask supercollider
+          app=/Applications/SuperCollider.app/Contents
+          python -I scripts/check-sc-plugin.py \
+            --sclang "$app/MacOS/sclang" \
+            --scsynth "$app/Resources/scsynth" \
+            --supernova "$app/Resources/supernova"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}-sc-plugin-${{ matrix.platform }}
+          path: dist/*.zip
+          if-no-files-found: error

@@ -6,6 +6,8 @@
 # SuperSonic's headers, link each set, and run the tests of the hand-written
 # UGens with AddressSanitizer and UndefinedBehaviorSanitizer. Then render the
 # help pages with SCDoc and compile their examples (scripts/check-help.py).
+# Last, build the loadable plugin for Linux, macOS and Windows and load it in
+# scsynth and supernova (sc-plugin.yml).
 #
 # The tools come from the same pinned nixpkgs as the release. The headers come
 # from pinned commits. Change a pin only on purpose; keep SUPERSONIC at the
@@ -23,7 +25,7 @@ permissions:
   contents: read
 
 env:
-  # nixpkgs with Faust 2.85.9 (the same as release.yml).
+  # nixpkgs with Faust 2.85.9 (the same as sc-plugin.yml).
   NIXPKGS: github:NixOS/nixpkgs/7fd4004d0511991fff3a0524856a9be09e28c5f0
   # SuperCollider Version-3.14.1.
   SC_REPO: https://github.com/supercollider/supercollider.git
@@ -72,3 +74,6 @@ jobs:
         run: |
           nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" "$NIXPKGS#supercollider" --command \
             python3 -I scripts/check-help.py --require-sclang
+
+  plugin:
+    uses: ./.github/workflows/sc-plugin.yml
