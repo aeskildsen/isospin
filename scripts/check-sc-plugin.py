@@ -4,14 +4,17 @@
 """Load and render check for the loadable SuperCollider plugin.
 
 Takes the extension folder that build-sc-plugin.py installs (isospin/) and
-puts it in a new user data folder, as the only user extension. Then:
+puts it in a new user data folder, as the only user extension. On macOS,
+SuperCollider finds the user folders from the system, not from HOME; there
+the check gives the paths to sclang (a language configuration file) and to
+the servers (-U, the plugin folder of the server and that of the extension).
+Then:
 
   1. sclang compiles the class library with the class files of the extension
      and writes a score for each UGen: the SynthDef, a buffer if the UGen
      needs one, and a synth that plays for a short time.
   2. scsynth renders each score in non-real-time mode, and then supernova
-     does the same. Each server loads the plugin from the user extension
-     folder, as it does for a user.
+     does the same. Each server loads the plugin from the extension folder.
   3. Each render must be complete, with no error from the server and no
      bad value (CheckBadValues), and each output channel must have sound.
 
@@ -48,9 +51,8 @@ MIN_PEAK = 1e-3
 # Server output that stops the check.
 ERRORS = ["not installed", "not found", "FAILURE", "ERROR", "exception", "CheckBadValues"]
 
-# The sclang program. It writes one score for each UGen into %DIR%. An error
-# in sclang stops the rest of a script file, and sclang then does not exit.
-# Thus the program catches each error and always comes to 0.exit.
+# The sclang program. It writes one score for each UGen into %DIR%. RUNNER
+# runs it.
 SCRIPT = r"""
 var dir = "%DIR%";
 var check = { |sig| CheckBadValues.ar(sig, 0, 2); Out.ar(0, sig) };
@@ -80,10 +82,32 @@ var scores = [
         Score(messages).writeOSCFile(dir +/+ name ++ ".osc");
         ("check-sc-plugin: score " ++ name).postln;
     };
+}.value;
+"""
+
+# The program that sclang starts. An error in sclang stops the rest of a
+# script file, and sclang then does not exit. SCRIPT refers to the classes of
+# the extension; if they are missing, SCRIPT does not compile. Thus RUNNER,
+# which refers only to the classes of SuperCollider, runs SCRIPT, catches each
+# error and always comes to 0.exit.
+RUNNER = r"""
+{
+    if(thisProcess.interpreter.executeFile("%SCRIPT%").isNil) {
+        "check-sc-plugin: sclang-error SCRIPT did not compile or run".postln;
+    };
 }.try { |error|
     ("check-sc-plugin: sclang-error " ++ error.errorString).postln;
 };
 0.exit;
+"""
+
+# The language configuration of sclang on macOS: the default class library and
+# the class files of the extension.
+LANG_CONFIG = """includePaths:
+    - "%CLASSES%"
+excludePaths: []
+postInlineWarnings: false
+excludeDefaultPaths: false
 """
 
 UGENS = ["woodbar", "superpos", "superposlive", "pulsar"]
@@ -91,14 +115,6 @@ UGENS = ["woodbar", "superpos", "superposlive", "pulsar"]
 
 def find(given: str | None, name: str) -> str | None:
     return given or shutil.which(name)
-
-
-def user_extensions(home: Path, data: Path) -> Path:
-    """The user extension folder of SuperCollider, with HOME at home and the
-    user data folder (XDG_DATA_HOME, LOCALAPPDATA) at data."""
-    if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / "SuperCollider" / "Extensions"
-    return data / "SuperCollider" / "Extensions"
 
 
 def peaks(path: Path) -> list[float]:
@@ -145,13 +161,26 @@ def main() -> None:
         # The macOS build of SuperCollider has only the cocoa platform.
         if sys.platform.startswith("linux"):
             env["QT_QPA_PLATFORM"] = "offscreen"
-        shutil.copytree(extension, user_extensions(home, data) / "isospin")
-        home.mkdir(exist_ok=True)
+        home.mkdir()
+        explicit = sys.platform == "darwin"
+        if explicit:
+            ext = tmp / "extension" / "isospin"
+        else:
+            ext = data / "SuperCollider" / "Extensions" / "isospin"
+        shutil.copytree(extension, ext)
+
+        sclang_cmd = [sclang]
+        if explicit:
+            config = tmp / "sclang_conf.yaml"
+            config.write_text(LANG_CONFIG.replace("%CLASSES%", str(ext / "Classes")))
+            sclang_cmd += ["-l", str(config)]
 
         script = tmp / "scores.scd"
         script.write_text(SCRIPT.replace("%DIR%", str(tmp)))
+        runner = tmp / "runner.scd"
+        runner.write_text(RUNNER.replace("%SCRIPT%", str(script)))
         try:
-            done = subprocess.run([sclang, str(script)], env=env, stdin=subprocess.DEVNULL,
+            done = subprocess.run(sclang_cmd + [str(runner)], env=env, stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, timeout=TIMEOUT)
         except subprocess.TimeoutExpired as error:
             text = "".join(s.decode(errors="replace") if isinstance(s, bytes) else (s or "")
@@ -169,6 +198,13 @@ def main() -> None:
                 out = tmp / f"{server}-{ugen}.wav"
                 cmd = [program, "-N", str(tmp / f"{ugen}.osc"), "_", str(out),
                        str(SAMPLE_RATE), "WAV", "int16", "-o", "2"]
+                if explicit:
+                    # The macOS application has the plugins of the server
+                    # next to it, in plugins/.
+                    stock = Path(program).resolve().parent / "plugins"
+                    if not stock.is_dir():
+                        sys.exit(f"check-sc-plugin: FAIL (no plugin folder {stock})")
+                    cmd += ["-U", f"{stock}{os.pathsep}{ext / 'plugins'}"]
                 try:
                     run = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
                                          text=True, timeout=TIMEOUT)
