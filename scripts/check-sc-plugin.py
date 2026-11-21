@@ -150,8 +150,13 @@ def main() -> None:
 
         script = tmp / "scores.scd"
         script.write_text(SCRIPT.replace("%DIR%", str(tmp)))
-        done = subprocess.run([sclang, str(script)], env=env, capture_output=True, text=True,
-                              timeout=TIMEOUT)
+        try:
+            done = subprocess.run([sclang, str(script)], env=env, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=TIMEOUT)
+        except subprocess.TimeoutExpired as error:
+            text = "".join(s.decode(errors="replace") if isinstance(s, bytes) else (s or "")
+                           for s in (error.stdout, error.stderr))
+            sys.exit(f"{text[-3000:]}\ncheck-sc-plugin: FAIL (sclang did not stop in {TIMEOUT} s)")
         text = done.stdout + done.stderr
         missing = [u for u in UGENS if not (tmp / f"{u}.osc").is_file()]
         if "check-sc-plugin: sclang-error" in text or missing:
@@ -165,7 +170,8 @@ def main() -> None:
                 cmd = [program, "-N", str(tmp / f"{ugen}.osc"), "_", str(out),
                        str(SAMPLE_RATE), "WAV", "int16", "-o", "2"]
                 try:
-                    run = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=TIMEOUT)
+                    run = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                         text=True, timeout=TIMEOUT)
                 except subprocess.TimeoutExpired:
                     failures.append(f"{server} {ugen}: no end in {TIMEOUT} s")
                     continue
