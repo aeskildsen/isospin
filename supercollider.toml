@@ -56,3 +56,16 @@ notice = """\
 McCartney, GPL-2.0-or-later, used under GPL-3.0) and from Mutable Instruments \
 Clouds (Copyright 2014 Emilie Gillet, MIT). The notice at the top of that file \
 gives the details and the MIT licence text."""
+
+[[native]]
+name = "Pulsar"
+dir = "native/pulsar"
+core = ["pulsar_core.cpp"]
+plugin = ["Pulsar.cpp"]
+classes = ["Pulsar.sc"]
+load = "Pulsar_Load"
+tests = ["test/pulsar_core_test.cpp"]
+notice = """\
+`pulsar_core.cpp` adapts code from SuperCollider (Copyright (c) 2002 James \
+McCartney, GPL-2.0-or-later, used under GPL-3.0). The notice at the top of \
+that file gives the details."""
