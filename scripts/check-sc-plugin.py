@@ -140,7 +140,11 @@ def main() -> None:
         data = tmp / "data"
         home = tmp / "home"
         env = dict(os.environ, HOME=str(home), XDG_DATA_HOME=str(data),
-                   XDG_CONFIG_HOME=str(data), LOCALAPPDATA=str(data), QT_QPA_PLATFORM="offscreen")
+                   XDG_CONFIG_HOME=str(data), LOCALAPPDATA=str(data))
+        # sclang starts Qt. On Linux, the offscreen platform needs no display.
+        # The macOS build of SuperCollider has only the cocoa platform.
+        if sys.platform.startswith("linux"):
+            env["QT_QPA_PLATFORM"] = "offscreen"
         shutil.copytree(extension, user_extensions(home, data) / "isospin")
         home.mkdir(exist_ok=True)
 
