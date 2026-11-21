@@ -1,10 +1,18 @@
 # Makes a GitHub release when a version tag (v1.2.3) is pushed. The release
-# holds the static SuperCollider UGen sources made by scripts/build-sc-static.py
-# and their SHA-256.
+# holds:
 #
-# Faust comes from a pinned nixpkgs revision, so that the release is the same,
-# byte for byte, as a local build with the same Faust. Change NIXPKGS only on
-# purpose: a new Faust version can change the generated sources.
+#   - the static SuperCollider UGen sources made by scripts/build-sc-static.py
+#     (isospin-sc-static-<version>.tar.gz), for engines that link the UGens
+#     into the server, such as SuperSonic;
+#   - the loadable SuperCollider plugin for each platform, made from that
+#     tarball by scripts/build-sc-plugin.py
+#     (isospin-sc-<version>-<platform>.zip);
+#   - the SHA-256 of each file.
+#
+# Faust comes from a pinned nixpkgs revision (in sc-plugin.yml), so that the
+# tarball is the same, byte for byte, as a local build with the same Faust.
+# Change NIXPKGS only on purpose: a new Faust version can change the generated
+# sources.
 name: Release
 
 on:
@@ -14,38 +22,37 @@ on:
 permissions:
   contents: write
 
-env:
-  # nixpkgs with Faust 2.85.9.
-  NIXPKGS: github:NixOS/nixpkgs/7fd4004d0511991fff3a0524856a9be09e28c5f0
-
 jobs:
   # The build checks of check.yml, on the tagged commit. No release when they
   # fail.
   check:
     uses: ./.github/workflows/check.yml
 
-  release:
+  build:
     needs: check
+    uses: ./.github/workflows/sc-plugin.yml
+    with:
+      release-tag: ${{ github.ref_name }}
+
+  release:
+    needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          # md2misc in external/md2misc makes the help pages.
-          submodules: true
-
-      - uses: cachix/install-nix-action@v31
-
-      - name: Build the static SuperCollider UGen sources
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          nix shell "$NIXPKGS#faust" "$NIXPKGS#python3" --command \
-            python3 -I scripts/build-sc-static.py --release "$version" --tarball dist
-          cat dist/*.sha256
+          pattern: ${{ github.ref_name }}-sc-*
+          path: dist
+          merge-multiple: true
 
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          cd dist
+          for f in *.zip; do sha256sum "$f" > "$f.sha256"; done
+          ls -l
+          faust=$(tar -xOzf isospin-sc-static-*.tar.gz --wildcards '*/BUILDINFO' | sed -n 's/^faust=//p')
+          gh release create "$GITHUB_REF_NAME" ./* \
+            --repo "$GITHUB_REPOSITORY" \
             --title "isospin $GITHUB_REF_NAME" \
-            --notes "Static SuperCollider UGen sources (isospin-sc-static), made with $(nix shell "$NIXPKGS#faust" --command faust --version | head -n 1). Check the download with the .sha256 file."
+            --notes "SuperCollider plugin of isospin for Linux, macOS and Windows (isospin-sc-*.zip; the README.md in each zip says how to install it), and the static SuperCollider UGen sources (isospin-sc-static), made with $faust. Check each download with its .sha256 file."

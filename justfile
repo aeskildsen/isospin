@@ -8,3 +8,11 @@ default:
 # Fast check: the release UGens without the fuzz test, against the CI commits of SuperCollider and SuperSonic, and the help pages
 check:
     bash just/project/check.sh
+
+# Build the loadable SuperCollider plugin into build/sc-plugin/isospin, then load and render it in scsynth and supernova
+sc-plugin:
+    bash just/project/sc-plugin.sh
+
+# Link build/sc-plugin/isospin into your SuperCollider user extension folder
+sc-install:
+    bash just/project/sc-install.sh

@@ -2,7 +2,7 @@
 
 DSP instruments written in [Faust](https://faust.grame.fr). One source for each instrument, built for several hosts: SuperCollider UGens first, Pd externals and CLAP plugins later.
 
-This repository holds the DSP sources and the scripts that make host code from them. The first host output is the static SuperCollider UGen sources (see below); the other builds are not here yet.
+This repository holds the DSP sources and the scripts that make host code from them. The SuperCollider builds are here: a plugin to install in SuperCollider, and static UGen sources for engines that link the UGens into the server (see below). The other builds are not here yet.
 
 ## Instruments
 
@@ -12,6 +12,10 @@ This repository holds the DSP sources and the scripts that make host code from t
 | `wood.lib` | Shared parts for the wooden instruments: damping law, mallet strike, noise modes. |
 | `native/superpos/` | SuperPos, a granular UGen in hand-written C++: overlapping grains from a mono buffer, started at a moving read pointer, with random grain times (`regularity`, `probability`), a window shape (`texture`) and a level control by `1/√n` (`normalize`) as in Mutable Instruments Clouds, and with per-grain detune, scatter and pan in stereo. With `normalize` 0 and the other controls at their defaults, its output is the same as a graph of SuperCollider's `Impulse`, `Phasor` and two-channel `GrainBuf` (see `superpos_core.h`). SuperPosLive uses the same grain engine on a circular record buffer: it records its input (any signal: a bus, a UGen, a device input), with freeze, and its grains never read across the record head. See [`native/superpos/README.md`](native/superpos/README.md). |
 | `native/pulsar/` | Pulsar, a pulsar synthesis UGen in hand-written C++: three trains of sine grains (the fundamental and two formants) in stereo, after the pulsar SynthDef of Alik Rustamoff's *Musical sound design in SuperCollider*. An `energy` input (usually an envelope from the SynthDef) sets the levels, the grain durations and the LFO rates, so the timbre follows the note. It processes only the grains that play, so it costs less CPU and much less real-time memory than the GrainSin SynthDef. `reference/pulsar.dsp` is the design in Faust; it is not in the release. See [`native/pulsar/Pulsar.md`](native/pulsar/Pulsar.md). |
+
+## Install in SuperCollider
+
+Each [GitHub release](https://github.com/aeskildsen/isospin/releases) has a plugin for scsynth and supernova, with the class files and help pages: `isospin-sc-<version>-linux-x86_64.zip`, `-macos-universal.zip` (Apple silicon and Intel) or `-windows-x86_64.zip`. Needs SuperCollider 3.14 or later. Put the `isospin` folder of the zip into your extension folder (`Platform.userExtensionDir.openOS;` opens it), then recompile the class library. The `README.md` in the zip has the details, also for macOS, where the plugin is not notarized.
 
 ## Try it
 
@@ -41,13 +45,23 @@ Release build (needs a clean working tree; the same commit and Faust version giv
 python3 -I scripts/build-sc-static.py --release 0.1.0 --tarball dist
 ```
 
-Push a tag `v<version>` to release. The workflow `.github/workflows/release.yml` builds `isospin-sc-static-<version>.tar.gz` with Faust from a pinned nixpkgs and attaches it and its `.sha256` file to a GitHub release. [flux-engine](https://github.com/aeskildsen/flux-engine) takes its UGens from these releases.
+Push a tag `v<version>` to release. The workflow `.github/workflows/release.yml` builds `isospin-sc-static-<version>.tar.gz` with Faust from a pinned nixpkgs, builds the plugin zips from it (see the next section), and attaches all of them and their `.sha256` files to a GitHub release. [flux-engine](https://github.com/aeskildsen/flux-engine) takes its UGens from these releases.
 
 Needs Faust (the releases use 2.85.9) and Python 3.11 or later.
 
 md2misc is a git submodule in `external/md2misc`. Clone with `git clone --recurse-submodules`, or run `git submodule update --init`. md2misc is GPL-3.0; it is a build tool and is not in the release.
 
 With Nix, `flake.nix` gives a shell with the same Faust, Python and C++ compiler as CI (the same pinned nixpkgs), and `just`. Run `nix develop`, or `nix develop -c <command>` for one command. With direnv and nix-direnv, run `direnv allow` once; the shell then loads when you go into the folder.
+
+### Loadable plugin
+
+`scripts/build-sc-plugin.py` builds the same sources as a loadable plugin, with CMake (`sc-plugin/CMakeLists.txt`): `isospin` for scsynth and `isospin_supernova` for supernova (`.so` on Linux, `.scx` on macOS and Windows), and installs a SuperCollider extension folder `isospin/` with the plugins, the class files and the help pages. It takes a static build folder or a release tarball (`--static`) and the include folder of the SuperCollider source (`--sc-include`); without `--static` it makes a development build first. `--zip DIR` also writes `isospin-sc-<version>-<platform>.zip`. On macOS the plugin is one universal binary.
+
+`scripts/check-sc-plugin.py` loads the extension folder in scsynth and supernova, as the only user extension, and renders each UGen in non-real-time mode. Each render must have sound and no bad values.
+
+The workflow `.github/workflows/sc-plugin.yml` builds the plugin on Linux (Ubuntu 22.04, so glibc 2.35 or later), macOS and Windows (MSVC), and runs the load check on Linux and macOS. `check.yml` runs it on each pull request with a development build; `release.yml` runs it with the release tarball.
+
+For your own use, `just sc-plugin` builds and checks the plugin in `build/sc-plugin/isospin`, and `just sc-install` links that folder into your user extension folder. After the next `just sc-plugin`, recompile the class library to use the new build. `just sc-install` stops if another copy of an isospin class is installed. Needs CMake 3.16 or later (in the Nix shell).
 
 ### Hand-written C++ UGens
 
