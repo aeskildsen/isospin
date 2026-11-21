@@ -50,8 +50,10 @@
                 # The scripts import md2misc from the external/md2misc
                 # submodule. md2misc also needs only the standard library.
                 # CMake builds the loadable plugin (scripts/build-sc-plugin.py).
+                # numpy is only for tools/ab/compare.py; CI does not use this
+                # shell.
                 faust
-                python3
+                (python3.withPackages (ps: [ ps.numpy ]))
                 gcc
                 cmake
               ]

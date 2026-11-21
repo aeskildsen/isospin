@@ -16,3 +16,7 @@ sc-plugin:
 # Link build/sc-plugin/isospin into your SuperCollider user extension folder
 sc-install:
     bash just/project/sc-install.sh
+
+# A/B render of two versions of a sound in NRT, with a comparison (see tools/ab/README.md)
+ab config:
+    bash tools/ab/ab.sh {{config}}
