@@ -4,12 +4,14 @@ UGens from [isospin](https://github.com/aeskildsen/isospin), built as a SuperCol
 
 | Class | What it is |
 |---|---|
-| `PhysWoodbar` | A struck wooden bar: claves, wood stick, xylophone or marimba bar. |
-| `SuperPos` | Granular synthesis from a mono buffer, with overlapping grains in stereo. |
-| `SuperPosLive` | The grain engine of `SuperPos` on a circular record buffer, with freeze. |
-| `Pulsar` | Pulsar synthesis: three trains of sine grains (a fundamental and two formants) in stereo, shaped by an energy input. |
+| `IsoWoodbar` | A struck wooden bar: claves, wood stick, xylophone or marimba bar. |
+| `IsoSuperPos` | Granular synthesis from a mono buffer, with overlapping grains in stereo. |
+| `IsoSuperPosLive` | The grain engine of `IsoSuperPos` on a circular record buffer, with freeze. |
+| `IsoPulsar` | Pulsar synthesis: three trains of sine grains (a fundamental and two formants) in stereo, shaped by an energy input. |
 
 The help page of each class has its arguments and examples.
+
+Each class starts with `Iso`, so that it does not have the same name as a class of another extension. Up to isospin 0.6.0 the classes were `PhysWoodbar`, `Pulsar`, `SuperPos` and `SuperPosLive`. Only the names changed: put `IsoWoodbar`, `IsoPulsar`, `IsoSuperPos` and `IsoSuperPosLive` in your code.
 
 ## Install
 
@@ -25,7 +27,7 @@ Needs SuperCollider 3.14 or later.
 xattr -dr com.apple.quarantine "<the extension folder>/isospin"
 ```
 
-**Remove an earlier copy.** If you have another copy of `PhysWoodbar`, `Pulsar`, `SuperPos` or `SuperPosLive` in your extensions (for example an older isospin), remove it first. Two class files with the same class stop the class library.
+**Remove an earlier copy.** If you have another copy of `IsoWoodbar`, `IsoPulsar`, `IsoSuperPos` or `IsoSuperPosLive` in your extensions (for example an older isospin), remove it first. Two class files with the same class stop the class library.
 
 ## Licence
 

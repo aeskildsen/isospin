@@ -18,7 +18,7 @@ link=$extensions/isospin
 
 # Two class files with the same class stop the class library.
 others=$(find -L "$extensions" -path "$link" -prune -o \
-	\( -name PhysWoodbar.sc -o -name SuperPos.sc -o -name SuperPosLive.sc -o -name Pulsar.sc \) -print 2>/dev/null || true)
+	\( -name IsoWoodbar.sc -o -name IsoSuperPos.sc -o -name IsoSuperPosLive.sc -o -name IsoPulsar.sc \) -print 2>/dev/null || true)
 if [ -n "$others" ]; then
 	echo "sc-install: other copies of isospin classes are installed; remove them first:" >&2
 	echo "$others" >&2

@@ -10,6 +10,10 @@ Contributions are welcome and appreciated.
 - Security issues must be reported privately; see [SECURITY.md](SECURITY.md)
 - By contributing, you confirm that you have the right to license your contribution under the project [licence](LICENSE)
 
+## Names
+
+Each SuperCollider class of isospin starts with `Iso` and a capital letter: `IsoWoodbar`, `IsoPulsar`. Then the classes do not have the same names as the classes of other extensions. `scripts/build-sc-static.py` gives each Faust UGen this prefix, and it stops if a hand-written UGen has a class without it. Give the Pd externals and the CLAP plugins the same prefix when they are added.
+
 ## AI-assisted contributions
 
 You may use AI assistance for code, documentation, and GitHub communication. Every contribution must have a responsible person in the loop who reviews and understands it before submission and remains accountable for it.

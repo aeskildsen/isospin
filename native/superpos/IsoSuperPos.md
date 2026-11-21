@@ -1,12 +1,12 @@
 ---
 summary: Overlapping grains from a mono buffer
-related: Classes/SuperPosLive, Classes/GrainBuf
+related: Classes/IsoSuperPosLive, Classes/GrainBuf
 categories: UGens>Buffer, UGens>Generators>Granular
 ---
 
 ## Description
 
-SuperPos plays overlapping grains from a mono buffer, in two channels (left, right). A read pointer moves through the buffer, and grains start at the pointer. [SuperPosLive](sc:Classes/SuperPosLive) plays the same grains from a circular record buffer of its input.
+IsoSuperPos plays overlapping grains from a mono buffer, in two channels (left, right). A read pointer moves through the buffer, and grains start at the pointer. [IsoSuperPosLive](sc:Classes/IsoSuperPosLive) plays the same grains from a circular record buffer of its input.
 
 The design comes from the SynthDef `\cloud` (GrainBuf with random triggers, detune, scatter and pan) and from the granular player of Mutable Instruments Clouds (window shape, level by `1/√n`).
 
@@ -37,15 +37,15 @@ Returns: an array of two channels (left, right).
 
 ## Behaviour to know
 
-- **Repeatable renders.** The random values come from the random generator of the synth. Put `RandSeed.ir(1, seed)` before SuperPos in the graph to get the same render each time. scsynth seeds the generator from the clock, so without `RandSeed` two renders differ.
-- **Buffer sample rate.** SuperPos reads at the buffer's own rate (as `BufRateScale`). `\cloud` applies `BufRateScale` twice; SuperPos applies it once.
+- **Repeatable renders.** The random values come from the random generator of the synth. Put `RandSeed.ir(1, seed)` before IsoSuperPos in the graph to get the same render each time. scsynth seeds the generator from the clock, so without `RandSeed` two renders differ.
+- **Buffer sample rate.** IsoSuperPos reads at the buffer's own rate (as `BufRateScale`). `\cloud` applies `BufRateScale` twice; IsoSuperPos applies it once.
 - **Level limits.** The level control holds for grains that do not correlate: a noise buffer, or a pointer that does not move with the grains. With `pointerRate` 1 and no detune, all grains read the same frame at the same time and add in phase. With random timing, very short grains and a low overlap, the level can change by about 1 dB with the grain length and 0.5 dB with the block size.
 - **High density.** With `regularity` above 0, a trigger in the sample after a trigger starts no grain. Above a few thousand grains a second, the mean rate is lower than `overlap / grainDur`.
-- **Old SynthDefs.** A SynthDef made with an older class file (from before the first release) can have a SuperPos UGen with one output or too few inputs. The UGen then gives silence and prints a message: make the SynthDef again.
+- **Old SynthDefs.** A SynthDef made with an older class file (from before the first release) can have a IsoSuperPos UGen with one output or too few inputs. The UGen then gives silence and prints a message: make the SynthDef again.
 
 ### The same as GrainBuf
 
-With `normalize` 0 and the other controls at their defaults, SuperPos gives the same output, bit for bit, as this graph in SuperCollider 3.14.1, while the buffer length does not change:
+With `normalize` 0 and the other controls at their defaults, IsoSuperPos gives the same output, bit for bit, as this graph in SuperCollider 3.14.1, while the buffer length does not change:
 
 ```supercollider
 (
@@ -66,7 +66,7 @@ Use `overlap / grainDur`, not `overlap * grainDur.reciprocal`: SuperCollider cal
 b = Buffer.read(s, Platform.resourceDir +/+ "sounds/a11wlk01.wav");
 
 (
-{ SuperPos.ar(b, pointerRate: 0.5, grainDur: 0.08, overlap: 8, regularity: 0.7,
+{ IsoSuperPos.ar(b, pointerRate: 0.5, grainDur: 0.08, overlap: 8, regularity: 0.7,
     detuneStep: 0.1, scatter: 0.05, stereoSpread: 0.6) }.play;
 )
 
@@ -74,7 +74,7 @@ b = Buffer.read(s, Platform.resourceDir +/+ "sounds/a11wlk01.wav");
 (
 {
     RandSeed.ir(1, 42);
-    SuperPos.ar(b, grainDur: 0.05, overlap: 12, regularity: 1, detuneStep: 0.3, stereoSpread: 1)
+    IsoSuperPos.ar(b, grainDur: 0.05, overlap: 12, regularity: 1, detuneStep: 0.3, stereoSpread: 1)
 }.play;
 )
 ```

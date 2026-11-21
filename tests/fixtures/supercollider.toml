@@ -7,7 +7,6 @@
 [[ugen]]
 dsp = "woodbar.dsp"
 class = "Woodbar"
-prefix = "Phys"
 
 [[native]]
 name = "IsoFixture"

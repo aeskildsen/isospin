@@ -1,12 +1,12 @@
 ---
 summary: Overlapping grains from a circular record buffer of the input
-related: Classes/SuperPos, Classes/GrainBuf
+related: Classes/IsoSuperPos, Classes/GrainBuf
 categories: UGens>Buffer, UGens>Generators>Granular
 ---
 
 ## Description
 
-SuperPosLive records its input into a circular buffer and plays grains of the recent input, in two channels (left, right). It can freeze the buffer. The grains are those of [SuperPos](sc:Classes/SuperPos), which plays them from a buffer that does not change.
+IsoSuperPosLive records its input into a circular buffer and plays grains of the recent input, in two channels (left, right). It can freeze the buffer. The grains are those of [IsoSuperPos](sc:Classes/IsoSuperPos), which plays them from a buffer that does not change.
 
 The buffer is a mono Buffer from the language. Its length is the longest delay.
 
@@ -14,7 +14,7 @@ The buffer is a mono Buffer from the language. Its length is the longest delay.
 
 ### *ar
 
-The arguments after `position` are those of SuperPos. Values outside the ranges below are clipped (`pan` is folded). NaN is safe: a NaN or infinite control does not make the output NaN, and the cloud starts again when the control is valid again.
+The arguments after `position` are those of IsoSuperPos. Values outside the ranges below are clipped (`pan` is folded). NaN is safe: a NaN or infinite control does not make the output NaN, and the cloud starts again when the control is valid again.
 
 | Argument | Range | What it does |
 |---|---|---|
@@ -41,8 +41,8 @@ Returns: an array of two channels (left, right).
 
 - **The read limit.** A grain never reads across the record head. When a grain cannot stay behind the head over its whole length (a long grain, transposed up, in a short buffer), it does not start. At transpose 0 with no detune every grain fits. When `freeze` changes, or the buffer changes, a grain that would reach the head plays on and fades out over its last 5 ms before the head.
 - **Freeze makes a comb.** With `freeze` on, a fixed `position` and no `scatter`, all grains read the same frames, so the output repeats at the grain interval. Use `scatter`, `regularity` or a moving `position` to prevent this.
-- **Buffer sample rate.** SuperPosLive records at the server rate, so it ignores the sample rate of its buffer.
-- **The other behaviour is that of SuperPos:** repeatable renders with `RandSeed`, the level limits, high density and old SynthDefs. See [SuperPos](sc:Classes/SuperPos).
+- **Buffer sample rate.** IsoSuperPosLive records at the server rate, so it ignores the sample rate of its buffer.
+- **The other behaviour is that of IsoSuperPos:** repeatable renders with `RandSeed`, the level limits, high density and old SynthDefs. See [IsoSuperPos](sc:Classes/IsoSuperPos).
 
 ## Examples
 
@@ -51,7 +51,7 @@ Returns: an array of two channels (left, right).
 ~rec = Buffer.alloc(s, s.sampleRate * 4, 1);
 
 (
-x = { |freeze = 0| SuperPosLive.ar(SoundIn.ar(0), ~rec, freeze, position: 0.2,
+x = { |freeze = 0| IsoSuperPosLive.ar(SoundIn.ar(0), ~rec, freeze, position: 0.2,
     grainDur: 0.1, overlap: 6, scatter: 0.3, stereoSpread: 0.5) }.play;
 )
 

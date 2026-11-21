@@ -37,7 +37,7 @@ public:
     Pulsar() {
         Unit* unit = this;
         if (numOutputs() != 2) {
-            Print("Pulsar: the SynthDef has a Pulsar UGen with %d outputs; it needs 2. Make the SynthDef again "
+            Print("IsoPulsar: the SynthDef has an IsoPulsar UGen with %d outputs; it needs 2. Make the SynthDef again "
                   "with the current class file.\n",
                   static_cast<int>(numOutputs()));
             SETCALC(ClearUnitOutputs);
@@ -87,5 +87,5 @@ private:
 
 void Pulsar_Load(InterfaceTable* inTable) {
     ISOSPIN_KEEP_TABLE(inTable);
-    registerUnit<Pulsar>(inTable, "Pulsar");
+    registerUnit<Pulsar>(inTable, "IsoPulsar");
 }

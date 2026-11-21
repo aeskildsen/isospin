@@ -58,18 +58,18 @@ var dir = "%DIR%";
 var check = { |sig| CheckBadValues.ar(sig, 0, 2); Out.ar(0, sig) };
 var scores = [
     \woodbar -> [
-        SynthDef(\woodbar, { check.(PhysWoodbar.ar(freq: 660, gate: LFPulse.kr(4, 0, 0.5))) })
+        SynthDef(\woodbar, { check.(IsoWoodbar.ar(freq: 660, gate: LFPulse.kr(4, 0, 0.5))) })
     ],
     \superpos -> [
-        SynthDef(\superpos, { check.(SuperPos.ar(0, 1, 0.05, 4, normalize: 1)) }),
+        SynthDef(\superpos, { check.(IsoSuperPos.ar(0, 1, 0.05, 4, normalize: 1)) }),
         [\b_alloc, 0, 4800, 1],
         [\b_gen, 0, \sine1, 5, 1, 0.5, 0.3]
     ],
     \pulsar -> [
-        SynthDef(\pulsar, { check.(Pulsar.ar(110, 0.5)) })
+        SynthDef(\pulsar, { check.(IsoPulsar.ar(110, 0.5)) })
     ],
     \superposlive -> [
-        SynthDef(\superposlive, { check.(SuperPosLive.ar(SinOsc.ar(220, 0, 0.5), 0, 0, 0.5, 0.05, 4)) }),
+        SynthDef(\superposlive, { check.(IsoSuperPosLive.ar(SinOsc.ar(220, 0, 0.5), 0, 0, 0.5, 0.05, 4)) }),
         [\b_alloc, 0, 48000, 1]
     ]
 ];

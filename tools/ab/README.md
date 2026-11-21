@@ -2,7 +2,7 @@
 
 A tool to compare two versions of a sound: render both in NRT with the same events, then compare level, brightness, stereo and, for deterministic sounds, the null residual. It is for the work on this repository, not part of the release:
 
-- a SynthDef made into a UGen (`\cloud` into SuperPos, the pulsar SynthDef into Pulsar);
+- a SynthDef made into a UGen (`\cloud` into IsoSuperPos, the pulsar SynthDef into IsoPulsar);
 - a UGen before and after a change (an optimisation, a refactor), with the plugin folder of an earlier build on one side;
 - a UGen against the graph of core UGens that it must equal.
 
@@ -52,6 +52,6 @@ null: residual -36.3 dB relative to a, with b 0 samples later than a
 
 | Config | What it compares |
 |---|---|
-| `superpos-grainbuf.scd` | SuperPos against the graph of `Impulse`, `Phasor` and `GrainBuf` that `superpos_core.h` names. Must be bit for bit. |
-| `pulsar.scd` | Pulsar against the GrainSin SynthDef that it comes from, with its pattern. Random: compare the numbers and listen. |
-| `pulsar-plain.scd` | Pulsar against three GrainSin trains, without random parts. About −36 dB at 220 Hz (grain lengths can differ by one sample). |
+| `superpos-grainbuf.scd` | IsoSuperPos against the graph of `Impulse`, `Phasor` and `GrainBuf` that `superpos_core.h` names. Must be bit for bit. |
+| `pulsar.scd` | IsoPulsar against the GrainSin SynthDef that it comes from, with its pattern. Random: compare the numbers and listen. |
+| `pulsar-plain.scd` | IsoPulsar against three GrainSin trains, without random parts. About −36 dB at 220 Hz (grain lengths can differ by one sample). |

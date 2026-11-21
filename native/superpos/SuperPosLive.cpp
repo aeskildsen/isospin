@@ -59,5 +59,5 @@ private:
 
 void SuperPosLive_Register(InterfaceTable* inTable) {
     ISOSPIN_KEEP_TABLE(inTable);
-    registerUnit<SuperPosLive>(inTable, "SuperPosLive");
+    registerUnit<SuperPosLive>(inTable, "IsoSuperPosLive");
 }

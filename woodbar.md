@@ -26,7 +26,7 @@ The UGen has one voice and two outputs. Use multichannel expansion for more bars
 (
 {
     var trig = Impulse.kr(3);
-    var bars = PhysWoodbar.ar(
+    var bars = IsoWoodbar.ar(
         freq: [220, 330, 440],
         gain: TRand.kr(0.4, 1, trig),
         gate: Trig.kr(trig, 0.01),
@@ -42,7 +42,7 @@ The UGen has one voice and two outputs. Use multichannel expansion for more bars
 (
 {
     var trig = Impulse.kr(4);
-    PhysWoodbar.ar(freq: 330, gain: 0.8, gate: Trig.kr(trig, 0.01),
+    IsoWoodbar.ar(freq: 330, gain: 0.8, gate: Trig.kr(trig, 0.01),
         decay: MouseX.kr(0.05, 4, 1), tilt: MouseY.kr(1, 0))
 }.play;
 )
@@ -50,7 +50,7 @@ The UGen has one voice and two outputs. Use multichannel expansion for more bars
 // One synth for each note.
 (
 SynthDef(\woodbar, { |out = 0, freq = 440, amp = 0.8, hardness = 0.5|
-    var sig = PhysWoodbar.ar(freq: freq, gain: amp, gate: 1, hardness: hardness);
+    var sig = IsoWoodbar.ar(freq: freq, gain: amp, gate: 1, hardness: hardness);
     DetectSilence.ar(sig[0], doneAction: Done.freeSelf);
     Out.ar(out, sig);
 }).add;

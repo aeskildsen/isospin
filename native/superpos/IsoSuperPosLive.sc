@@ -1,4 +1,4 @@
-// SuperPosLive: the grains of SuperPos from a circular record buffer. The
+// IsoSuperPosLive: the grains of IsoSuperPos from a circular record buffer. The
 // UGen writes `in` into `bufnum` (a mono Buffer from the language; its length
 // is the longest delay) and plays grains of the recent input, in two
 // channels (left, right).
@@ -7,9 +7,9 @@
 // position sets where grains start: 0 = the newest input, 1 = the oldest. A
 // grain never reads across the record head; when it cannot stay behind the
 // head (a long grain transposed up in a short buffer), it does not start.
-// The other arguments are those of SuperPos; scatter moves a grain further
+// The other arguments are those of IsoSuperPos; scatter moves a grain further
 // back.
-SuperPosLive : MultiOutUGen {
+IsoSuperPosLive : MultiOutUGen {
     *ar { |in = 0, bufnum = 0, freeze = 0, position = 0, grainDur = 0.025, overlap = 5, transpose = 0,
             regularity = 0, probability = 1, texture = 1,
             detuneStep = 0, scatter = 0, pan = 0, stereoSpread = 0, normalize = 1, maxGrains = 64|

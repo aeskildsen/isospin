@@ -6,7 +6,7 @@ categories: UGens>Generators>Granular
 
 ## Description
 
-Pulsar plays three trains of sine grains, in two channels (left, right). Each train starts a grain at each period of `freq`. A grain is a short sine under a Hann window, as a grain of [GrainSin](sc:Classes/GrainSin).
+IsoPulsar plays three trains of sine grains, in two channels (left, right). Each train starts a grain at each period of `freq`. A grain is a short sine under a Hann window, as a grain of [GrainSin](sc:Classes/GrainSin).
 
 - Train 0 is the fundamental: its grains have the frequency `freq`.
 - Train 1 is the first formant: its grains have the frequency `freq * formant1`.
@@ -24,7 +24,7 @@ Pink noise on the energy (`jitter`) makes each note a little different, and each
 
 `velocity` makes the note louder and brighter together, as on an acoustic instrument.
 
-The design comes from the pulsar SynthDef of Alik Rustamoff's video series *Musical sound design in SuperCollider* (episode 1, pulsar synthesis), which uses three GrainSin UGens. Pulsar makes the same sound with less work for the processor and much less real-time memory.
+The design comes from the pulsar SynthDef of Alik Rustamoff's video series *Musical sound design in SuperCollider* (episode 1, pulsar synthesis), which uses three GrainSin UGens. IsoPulsar makes the same sound with less work for the processor and much less real-time memory.
 
 ## Class methods
 
@@ -50,8 +50,8 @@ Values outside the ranges below are clipped. NaN is safe: a NaN or infinite cont
 
 ## Behaviour to know
 
-- **The envelope is not in the UGen.** Pulsar has no gate and does not free its synth. Put the envelope in the SynthDef, connect it to `energy`, and free the synth with the envelope (`Env.perc(...).kr(Done.freeSelf)`) or with `DetectSilence`.
-- **Random values come from the synth.** Each Pulsar draws its random values (LFO phases, trigger offsets, the noise) from the random generator of its synth when it starts, as `Rand` does. Use `RandSeed` to repeat a note exactly.
+- **The envelope is not in the UGen.** IsoPulsar has no gate and does not free its synth. Put the envelope in the SynthDef, connect it to `energy`, and free the synth with the envelope (`Env.perc(...).kr(Done.freeSelf)`) or with `DetectSilence`.
+- **Random values come from the synth.** Each IsoPulsar draws its random values (LFO phases, trigger offsets, the noise) from the random generator of its synth when it starts, as `Rand` does. Use `RandSeed` to repeat a note exactly.
 - **Control rate.** All inputs are read once in each block. `energy`, the noise and the levels change once in each block, and the levels are interpolated over the block, as in a SynthDef with control-rate envelopes. The grains start at the exact sample.
 - **A grain holds its values.** A grain keeps its frequency and duration from the sample where it starts, as in GrainSin.
 - **Grain pool.** Each train has 16 grains in each channel. From a `freq` of 100 Hz the pool does not get full at any control values; with `wobble`, `detune` and `law` at their defaults this is true from 20 Hz. When a pool is full, a new grain does not start.
@@ -65,7 +65,7 @@ Values outside the ranges below are clipped. NaN is safe: a NaN or infinite cont
 SynthDef(\pulsar, { |out = 0, freq = 440, amp = 0.2, vel = 0.5, rel = 3|
     var att = freq.clip(50, 1500).linlin(50, 1500, 0.1, 0.02);
     var env = Env.perc(att, rel).kr(Done.freeSelf);
-    var sig = Pulsar.ar(freq, env, vel,
+    var sig = IsoPulsar.ar(freq, env, vel,
         formant1: \formant1.kr(2), formant2: \formant2.kr(6),
         overlap0: Rand(0.5, 2), overlap1: \overlap1.kr(2), overlap2: \overlap2.kr(2));
     Out.ar(out, sig * amp);
@@ -93,13 +93,13 @@ Pbind(
 (
 x = { |gate = 1|
     var env = Env.adsr(0.3, 0.5, 0.6, 2).kr(Done.freeSelf, gate);
-    Pulsar.ar(110, env, 0.7, formant1: 3, formant2: 7, overlap1: 1, law: 1) * 0.3
+    IsoPulsar.ar(110, env, 0.7, formant1: 3, formant2: 7, overlap1: 1, law: 1) * 0.3
 }.play;
 )
 x.set(\gate, 0);
 
 // energy from a slow LFO: the timbre breathes.
-{ Pulsar.ar(165, SinOsc.kr(0.2).range(0.1, 0.9), 0.6, formant2: 5) * 0.3 }.play;
+{ IsoPulsar.ar(165, SinOsc.kr(0.2).range(0.1, 0.9), 0.6, formant2: 5) * 0.3 }.play;
 ```
 
 ## References
@@ -108,13 +108,13 @@ x.set(\gate, 0);
 
 Rustamoff, A. *Musical sound design in SuperCollider*, episode 1: pulsar synthesis. Video series on YouTube.
 
-The source of the design. The patch builds a pulsar sound from GrainSin step by step: a train of grains whose duration is tied to the trigger period, a fundamental and two formant trains, an envelope that also controls the grain durations and levels through powers, pink noise on the envelope, and LFOs whose rate follows the envelope. Pulsar implements the SynthDef of the step that adds the LFOs. The later steps add allpass diffusion, which Pulsar does not have; put an effect after it for that. Pulsar keeps the constants of the SynthDef: the powers, the LFO rates and ranges, and the trigger offsets. The controls `law`, `wobble`, `jitter` and `width` turn parts of the patch on and off; `law` 1 is a variant from the same episode.
+The source of the design. The patch builds a pulsar sound from GrainSin step by step: a train of grains whose duration is tied to the trigger period, a fundamental and two formant trains, an envelope that also controls the grain durations and levels through powers, pink noise on the envelope, and LFOs whose rate follows the envelope. IsoPulsar implements the SynthDef of the step that adds the LFOs. The later steps add allpass diffusion, which IsoPulsar does not have; put an effect after it for that. IsoPulsar keeps the constants of the SynthDef: the powers, the LFO rates and ranges, and the trigger offsets. The controls `law`, `wobble`, `jitter` and `width` turn parts of the patch on and off; `law` 1 is a variant from the same episode.
 
 ### Roads 2001
 
 Roads, C. (2001). *Microsound.* MIT Press.
 
-The book that describes pulsar synthesis: a train of short pulses (pulsarets) at a fundamental frequency, each pulse shorter than or as long as its period, so that the pulse length sets a formant independently of the pitch. Pulsar follows this model with sine pulsarets and Hann windows, and allows grains longer than one period (overlap above 1), as GrainSin does.
+The book that describes pulsar synthesis: a train of short pulses (pulsarets) at a fundamental frequency, each pulse shorter than or as long as its period, so that the pulse length sets a formant independently of the pitch. IsoPulsar follows this model with sine pulsarets and Hann windows, and allows grains longer than one period (overlap above 1), as GrainSin does.
 
 ## Design choices without a source
 

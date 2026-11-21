@@ -1,4 +1,4 @@
-// Pulsar (b) against the GrainSin SynthDef that it comes from (a), with the
+// IsoPulsar (b) against the GrainSin SynthDef that it comes from (a), with the
 // pattern of that SynthDef. Both sides have random values (LFO phases, noise,
 // trigger offsets), so the null residual is not meaningful: compare level,
 // brightness and stereo correlation, and listen. pulsar-plain.scd is the
@@ -36,11 +36,11 @@ a: (
 	})
 ),
 b: (
-	name: "Pulsar",
+	name: "IsoPulsar",
 	def: SynthDef(\abPulsar, {
 		var f = \freq.kr(440);
 		var e = Env.perc(f.clip(50, 1500).linlin(50, 1500, 0.1, 0.02), \rel.kr(3)).kr;
-		var d = Pulsar.ar(f, e, (\lev.kr(0.03) / 0.003).log10 / 2,
+		var d = IsoPulsar.ar(f, e, (\lev.kr(0.03) / 0.003).log10 / 2,
 			\formantA.kr(2), \formantB.kr(6), \overlapF.kr(1), \overlapA.kr(2), \overlapB.kr(2))
 			* \amp.kr(0.2);
 		DetectSilence.ar(d, doneAction: 2);

@@ -1,4 +1,4 @@
-// SuperPos (b) against the graph of Impulse, Phasor and GrainBuf that
+// IsoSuperPos (b) against the graph of Impulse, Phasor and GrainBuf that
 // native/superpos/superpos_core.h names (a). With normalize 0 and the other
 // controls at their defaults, the two outputs are the same, bit for bit: the
 // null residual must be -inf dB at lag 0.
@@ -21,9 +21,9 @@ a: (
 	})
 ),
 b: (
-	name: "SuperPos",
+	name: "IsoSuperPos",
 	def: SynthDef(\abSuperPos, {
-		var sig = SuperPos.ar(0, \pointerRate.kr(0.5), \grainDur.kr(0.05), \overlap.kr(4),
+		var sig = IsoSuperPos.ar(0, \pointerRate.kr(0.5), \grainDur.kr(0.05), \overlap.kr(4),
 			\transpose.kr(3), normalize: 0, maxGrains: 64);
 		Out.ar(0, sig * 0.2);
 	})

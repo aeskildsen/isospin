@@ -39,9 +39,15 @@ build writes the CLASSMETHODS:: section from the Faust description: one
 argument for each control, with its tooltip and range. The Markdown file
 marks the place of this section with a line <!-- md2misc: classmethods -->.
 The help page of a hand-written UGen comes from the Markdown file next to
-each class file (SuperPos.md for SuperPos.sc), with its own class methods
-section. The build stops if the methods and arguments of a help page are not
+each class file (IsoSuperPos.md for IsoSuperPos.sc), with its own class
+methods section. The build stops if the methods and arguments of a help page are not
 those of the class file, in the same order.
+
+Each SuperCollider class of isospin starts with "Iso" and a capital letter
+(IsoWoodbar, IsoPulsar), so that the classes do not have the same names as
+the classes of other extensions. The build gives each Faust UGen the prefix
+"Iso", and it stops if a hand-written UGen has a class without the prefix, or
+a class file whose UGen name its wrapper does not register.
 
 Needs faust on PATH (the Faust version is in BUILDINFO) and the md2misc
 submodule in external/md2misc (git submodule update --init).
@@ -83,6 +89,15 @@ NATIVE_HEADERS = ["isospin/sc_plugin_table.h"]
 # sources in `core` and `plugin`: the headers. Files in its test/ folder are
 # for the build checks only.
 NATIVE_HEADER_SUFFIXES = (".h", ".hpp")
+
+# The start of each SuperCollider class name of isospin. For a Faust UGen it is
+# SC_FAUST_PREFIX: Faust puts it before the capitalised Faust name.
+CLASS_PREFIX = "Iso"
+CLASS_NAME = re.compile(rf"{CLASS_PREFIX}[A-Z][A-Za-z0-9]*")
+
+# A class definition in a class file: "Name : Superclass {" at the start of a
+# line. A class extension ("+ Name {") does not match.
+CLASS_DEFINITION = re.compile(r"^([A-Za-z]\w*)\s*:\s*[A-Za-z]\w*\s*\{", re.MULTILINE)
 
 
 def load_rewrite():
@@ -139,9 +154,13 @@ def read_manifest(path: Path) -> tuple[list[dict], list[dict]]:
     ugens = data.get("ugen", [])
     natives = data.get("native", [])
     for ugen in ugens:
-        for key in ("dsp", "class", "prefix"):
+        for key in ("dsp", "class"):
             if not isinstance(ugen.get(key), str) or not ugen[key]:
                 sys.exit(f"{path.name}: each [[ugen]] needs a {key} string")
+        if "prefix" in ugen:
+            sys.exit(f"{path.name}: [[ugen]] {ugen['dsp']}: remove prefix; the prefix of "
+                     f"each class is {CLASS_PREFIX}")
+        ugen["prefix"] = CLASS_PREFIX
         source = help_source(ugen)
         if not source.is_file():
             sys.exit(f"{path.name}: [[ugen]] {ugen['dsp']}: no help page "
@@ -174,10 +193,34 @@ def read_manifest(path: Path) -> tuple[list[dict], list[dict]]:
         for rel in native["core"] + native["plugin"]:
             if Path(rel).parts[0] == "test":
                 sys.exit(f"{path.name}: [[native]] {name}: {rel}: the test/ folder is for tests only")
+        check_native_classes(path.name, native)
         names.append(name)
     if len(set(names)) != len(names):
         sys.exit(f"{path.name}: two UGens have the same class or name")
     return ugens, natives
+
+
+def check_native_classes(manifest: str, native: dict) -> None:
+    """Stops the build if a class file of a hand-written UGen defines a class
+    without the prefix, does not define the class of its file name, or
+    defines a UGen whose name the wrapper sources do not register."""
+    folder = ROOT / native["dir"]
+    wrapper = "".join((folder / rel).read_text() for rel in native["plugin"])
+    where = f"{manifest}: [[native]] {native['name']}"
+    for rel in native["classes"]:
+        classes = CLASS_DEFINITION.findall((folder / rel).read_text())
+        stem = Path(rel).stem
+        if stem not in classes:
+            sys.exit(f"{where}: {rel} must define the class {stem}")
+        for cls in classes:
+            if not CLASS_NAME.fullmatch(cls):
+                sys.exit(f"{where}: {rel}: the class {cls} must start with "
+                         f"{CLASS_PREFIX} and a capital letter, for example "
+                         f"{CLASS_PREFIX}{cls[:1].upper()}{cls[1:]}")
+        # The server finds a UGen by the name of its class.
+        if f'"{stem}"' not in wrapper:
+            sys.exit(f"{where}: the wrapper sources do not register the UGen \"{stem}\" "
+                     f"of {rel}")
 
 
 def native_sources(native: dict) -> list[str]:

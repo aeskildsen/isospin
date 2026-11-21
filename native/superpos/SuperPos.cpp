@@ -78,6 +78,6 @@ private:
 
 void SuperPos_Load(InterfaceTable* inTable) {
     ISOSPIN_KEEP_TABLE(inTable);
-    registerUnit<SuperPos>(inTable, "SuperPos");
+    registerUnit<SuperPos>(inTable, "IsoSuperPos");
     SuperPosLive_Register(inTable);
 }

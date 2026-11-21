@@ -1,4 +1,4 @@
-// Pulsar (b) against three GrainSin trains (a), without random parts: no
+// IsoPulsar (b) against three GrainSin trains (a), without random parts: no
 // wobble, jitter or detune, and a constant energy. The two sides then make
 // the same grains. Expect a null residual of about -30 to -40 dB: a grain
 // length can differ by one sample, because GrainSin calculates the duration
@@ -23,9 +23,9 @@ a: (
 	})
 ),
 b: (
-	name: "Pulsar",
+	name: "IsoPulsar",
 	def: SynthDef(\abPulsarPlain, {
-		Out.ar(0, Pulsar.ar(freq, energy, (lev / 0.003).log10 / 2, 2, 6, 1, 2, 2,
+		Out.ar(0, IsoPulsar.ar(freq, energy, (lev / 0.003).log10 / 2, 2, 6, 1, 2, 2,
 			wobble: 0, detune: 0, jitter: 0, width: 0));
 	})
 ),

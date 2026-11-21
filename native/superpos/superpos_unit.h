@@ -72,7 +72,7 @@ protected:
     void failed() {
         Unit* unit = this;
         if (!usableShape()) {
-            Print("SuperPos: the SynthDef has a SuperPos UGen with %d outputs and %d inputs; it needs 2 outputs "
+            Print("IsoSuperPos: the SynthDef has an IsoSuperPos or IsoSuperPosLive UGen with %d outputs and %d inputs; it needs 2 outputs "
                   "and at least %d inputs. Make the SynthDef again with the current class file.\n",
                   static_cast<int>(numOutputs()), static_cast<int>(numInputs()), mMinInputs);
             SETCALC(ClearUnitOutputs);

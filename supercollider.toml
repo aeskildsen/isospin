@@ -6,8 +6,11 @@
 # dsp:    the Faust source.
 # class:  the class name for Faust (-cn). The static load function is
 #         <class>_Load.
-# prefix: SC_FAUST_PREFIX. Faust puts it before the capitalised Faust name:
-#         with prefix "Phys", the Faust name "woodbar" becomes PhysWoodbar.
+#
+# Each SuperCollider class of isospin starts with "Iso" and a capital letter.
+# The build gives each Faust UGen this prefix: the Faust name "woodbar" becomes
+# the class IsoWoodbar. For a hand-written UGen, the build stops if a class
+# does not have the prefix.
 #
 # The help page of a Faust UGen is the Markdown file next to its Faust source
 # (woodbar.md for woodbar.dsp); the build stops if it is missing. The build
@@ -33,7 +36,7 @@
 #          the UGen adapts from other projects and their licences.
 #
 # The help page of each class is the Markdown file next to its class file
-# (SuperPos.md for SuperPos.sc); the build stops if it is missing. Its
+# (IsoSuperPos.md for IsoSuperPos.sc); the build stops if it is missing. Its
 # "## Class methods" section has a "### *ar" heading for each class method
 # and an argument table with the arguments of the class file, in the same
 # order; the build stops if they differ.
@@ -41,14 +44,13 @@
 [[ugen]]
 dsp = "woodbar.dsp"
 class = "Woodbar"
-prefix = "Phys"
 
 [[native]]
 name = "SuperPos"
 dir = "native/superpos"
 core = ["superpos_core.cpp"]
 plugin = ["SuperPos.cpp", "SuperPosLive.cpp"]
-classes = ["SuperPos.sc", "SuperPosLive.sc"]
+classes = ["IsoSuperPos.sc", "IsoSuperPosLive.sc"]
 load = "SuperPos_Load"
 tests = ["test/superpos_core_test.cpp", "test/superpos_live_test.cpp", "test/superpos_fuzz.cpp"]
 notice = """\
@@ -62,7 +64,7 @@ name = "Pulsar"
 dir = "native/pulsar"
 core = ["pulsar_core.cpp"]
 plugin = ["Pulsar.cpp"]
-classes = ["Pulsar.sc"]
+classes = ["IsoPulsar.sc"]
 load = "Pulsar_Load"
 tests = ["test/pulsar_core_test.cpp"]
 notice = """\
